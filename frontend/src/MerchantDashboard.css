@@ -1,0 +1,301 @@
+.merchant-app {
+  min-height: 100vh;
+  background: #eef1f6;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  color: #1a1e27;
+}
+
+.merchant-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: #14161f;
+  color: #f2f3f5;
+  padding: 0.9rem 1.5rem;
+}
+
+.merchant-topbar-left {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+
+.merchant-logo {
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  font-size: 0.95rem;
+  color: #f4c95d;
+}
+
+.merchant-subtitle {
+  font-size: 0.78rem;
+  color: #9aa0ad;
+}
+
+.back-link {
+  color: #9aa0ad;
+  font-size: 0.8rem;
+  text-decoration: none;
+}
+
+.back-link:hover {
+  color: #f2f3f5;
+}
+
+.merchant-tabs {
+  display: flex;
+  gap: 0.25rem;
+  background: #1e2029;
+  padding: 0 1.5rem;
+}
+
+.merchant-tabs button {
+  background: none;
+  border: none;
+  color: #9aa0ad;
+  padding: 0.7rem 1rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+}
+
+.merchant-tabs button.active {
+  color: #f2f3f5;
+  border-bottom-color: #f4c95d;
+}
+
+.merchant-content {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 1.5rem;
+}
+
+.panel {
+  background: white;
+  border-radius: 10px;
+  padding: 1.25rem 1.5rem;
+  box-shadow: 0 1px 3px rgba(20, 22, 31, 0.08);
+  margin-bottom: 1.5rem;
+}
+
+.panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1rem;
+}
+
+.panel-header h2 {
+  font-size: 1.05rem;
+  margin: 0;
+}
+
+.live-dot {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+}
+
+.live-dot.live {
+  background: #e3f7e9;
+  color: #1f8a4c;
+}
+
+.live-dot.down {
+  background: #fbe6e6;
+  color: #b23434;
+}
+
+.refresh {
+  border: 1px solid #d7dae2;
+  background: white;
+  border-radius: 6px;
+  padding: 0.35rem 0.8rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.refresh:hover {
+  background: #f4f5f8;
+}
+
+.muted {
+  color: #767c8a;
+}
+
+.small {
+  font-size: 0.72rem;
+}
+
+.banner-error {
+  background: #fbe6e6;
+  color: #8c2c2c;
+  border-radius: 6px;
+  padding: 0.6rem 0.8rem;
+  font-size: 0.85rem;
+  margin-bottom: 0.75rem;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.data-table th {
+  text-align: left;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #767c8a;
+  border-bottom: 1px solid #e5e7ee;
+  padding: 0.5rem 0.6rem;
+}
+
+.data-table td {
+  padding: 0.6rem;
+  border-bottom: 1px solid #f0f1f5;
+  vertical-align: top;
+}
+
+.data-table tr.row-failed {
+  background: #fff7f2;
+}
+
+.amount {
+  font-weight: 700;
+}
+
+.amount.over {
+  color: #b2540c;
+}
+
+.agent-badge {
+  display: inline-block;
+  padding: 0.15rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 600;
+}
+
+.agent-badge.human_session {
+  background: #e7edfb;
+  color: #29498f;
+}
+
+.agent-badge.ai_agent {
+  background: #f1e7fb;
+  color: #6a2f9e;
+}
+
+.actions {
+  display: flex;
+  gap: 0.4rem;
+}
+
+.actions button {
+  border: none;
+  border-radius: 6px;
+  padding: 0.4rem 0.75rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+  color: white;
+}
+
+.actions button.approve {
+  background: #1f8a4c;
+}
+
+.actions button.reject {
+  background: #b23434;
+}
+
+.actions button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.agent-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 1rem;
+}
+
+.agent-card {
+  border: 1px solid #e5e7ee;
+  border-radius: 8px;
+  padding: 1rem;
+}
+
+.agent-card-top {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.75rem;
+}
+
+.agent-name {
+  font-weight: 600;
+}
+
+.budget-bar {
+  background: #eef0f4;
+  border-radius: 999px;
+  height: 8px;
+  overflow: hidden;
+  margin-bottom: 0.4rem;
+}
+
+.budget-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #f4c95d, #b2540c);
+}
+
+.budget-numbers {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.82rem;
+}
+
+.filter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.filter-row label {
+  display: flex;
+  flex-direction: column;
+  font-size: 0.72rem;
+  color: #767c8a;
+  gap: 0.25rem;
+}
+
+.filter-row select {
+  padding: 0.4rem 0.5rem;
+  border-radius: 6px;
+  border: 1px solid #d7dae2;
+  font-size: 0.82rem;
+  min-width: 160px;
+}
+
+.audit-trail-scroll {
+  overflow-x: auto;
+}
+
+.audit-table {
+  min-width: 900px;
+}
+
+.step-chip {
+  background: #1e2029;
+  color: #f4c95d;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+}
