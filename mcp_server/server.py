@@ -23,54 +23,36 @@ purchases, since getting this wrong would mean every MCP order is charged
 to/authorized as the wrong agent.
 
 No real payment UI exists for a server-to-server AI buyer this session
-(there's no browser, so no Checkout.js), so checkout() and
-resolve_pending_approval() close the loop themselves: once a real
-test-mode Razorpay order exists and the pipeline pauses at verification for
-a payment webhook, _synthetic_captured_webhook() below builds a
-payment.captured envelope (the same shape payments/razorpay_gateway.py's
-parse_payment_webhook already expects from a real webhook) and resumes
-immediately. This is the AI-buyer analog of server/app.py's
-_build_webhook_from_checkout_outcome, which does the same thing from real
-Checkout.js client-callback data — an MCP buyer has no client callback to
-wrap, so this synthesizes the capture instead. Every other pipeline node
-(intent/retrieve/recommend/policy_check/authorization/razorpay) still runs
-for real, unmodified.
-
-Process-boundary note for resolve_pending_approval: pipeline/graph.py's
-GRAPH is compiled with an InMemorySaver checkpointer, valid only inside the
-single process that ran the original run_pipeline() call for a given
-thread_id (see that module's comment on GRAPH). Because checkout() runs
-inside this MCP server process, resuming a paused thread must also happen
-inside this same process. Day 10-11 solved that by exposing merchant
-approval AS an MCP tool (merchant_resolve_pending_approval), reached by a
-separate approve_order.py CLI script, and relied on convention (a name and
-docstring that said MERCHANT-ONLY) to keep an AI buyer from ever calling
-it. Day 12 removes that tool entirely: resolve_pending_approval below is a
-plain function, never decorated with @mcp.tool(), so it never appears in
-this server's MCP tools/list and no MCP client — AI buyer or otherwise —
-can invoke it under any circumstance. The merchant dashboard (see
-merchant_router below) still needs it to run in-process for the same
-InMemorySaver reason above, so build_http_app() mounts the dashboard's
-FastAPI routes into this exact process/ASGI app, alongside the MCP
-transport, on the same port. The dashboard calls resolve_pending_approval()
-as a normal Python function call from its own HTTP handler — never over
-MCP — the same pattern server/app.py's WebSocket handler already uses to
-call resume_pipeline() directly. This makes the self-approval exclusion
-structural (no tool exists to call) instead of conventional (a tool exists
-but you're asked not to call it).
+(there's no browser, so no Checkout.js), so checkout() closes the loop
+itself: once a real test-mode Razorpay order exists and the pipeline
+pauses at verification for a payment webhook, _synthetic_captured_webhook()
+below builds a payment.captured envelope (the same shape
+payments/razorpay_gateway.py's parse_payment_webhook already expects from a
+real webhook) and resumes immediately. This is the AI-buyer analog of
+server/app.py's _build_webhook_from_checkout_outcome, which does the same
+thing from real Checkout.js client-callback data — an MCP buyer has no
+client callback to wrap, so this synthesizes the capture instead. Every
+other pipeline node (intent/retrieve/recommend/policy_check/authorization/
+razorpay) still runs for real, unmodified. ai_agent purchases over the
+merchant's approval_required_above pause instead of auto-authorizing (see
+pipeline/graph.py's authorization_node) — checkout() surfaces that pause as
+outcome "pending_approval" rather than treating it as a failure. Resolving
+it is a plain HTTP call to merchant_router's /resolve-approval below, never
+an MCP tool (an AI agent must never be able to approve its own purchase —
+decided Day 12); once approved, that same handler auto-advances through the
+webhook pause exactly like checkout() does, since there's still no
+payment UI on this side to do it separately.
 
 Run:
     python -m mcp_server.server            # stdio transport (day-1 spike's
                                             # verified pattern; one server
                                             # subprocess per client)
     python -m mcp_server.server --http     # streamable-http + the merchant
-                                            # dashboard API/WS, both served
-                                            # from one process on
-                                            # 127.0.0.1:8765 (MCP at /mcp,
-                                            # dashboard at /merchant/*) —
-                                            # required so both share this
-                                            # process's in-memory pipeline
-                                            # state.
+                                            # dashboard API, both served from
+                                            # one process on 127.0.0.1:8765
+                                            # (MCP at /mcp, dashboard at
+                                            # /merchant/*) — one process, one
+                                            # port, for convenience.
 """
 
 import argparse
@@ -82,17 +64,25 @@ from decimal import Decimal
 from typing import Any, Optional
 
 import uvicorn
-from fastapi import APIRouter, FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from mcp.server.fastmcp import FastMCP
 from pydantic import BaseModel
 
 from catalog.retrieval import get_product_detail, search_products
 from db.agents import get_agent, list_agents
-from db.approvals import list_pending_approval_requests
+from db.approvals import get_approval_request, list_pending_approvals_for_merchant
 from db.audit import get_full_audit_trail
+from db.merchants import get_merchant_by_email
 from db.orders import get_order
-from db.policy import get_merchant_policy
+from db.products import adjust_product_stock, list_products_for_merchant
+from mcp_server.merchant_auth import (
+    COOKIE_NAME,
+    TOKEN_TTL_SECONDS,
+    create_session_token,
+    get_current_merchant,
+    verify_password,
+)
 from pipeline.graph import resume_pipeline, run_pipeline
 
 AI_AGENT_ID = 6  # seeded ai_agent "Shopping Assistant Agent"; hardcoded, no
@@ -100,40 +90,6 @@ AI_AGENT_ID = 6  # seeded ai_agent "Shopping Assistant Agent"; hardcoded, no
 #   SELECT id FROM agent WHERE name = 'Shopping Assistant Agent';
 
 mcp = FastMCP("AgenticCommerceAIBuyer", port=8765)
-
-# order_id -> thread_id for pipeline runs started by checkout() in THIS
-# process, so resolve_pending_approval() can find which paused LangGraph
-# thread to resume. Same in-memory-map pattern as server/app.py's
-# _razorpay_order_to_thread — necessarily process-local plumbing for this
-# front door, not pipeline logic.
-_order_to_thread: dict[int, str] = {}
-
-# thread_id -> the interrupt "type" currently pending for that thread. Same
-# duplicate-resume guard as server/app.py's _pending_interrupt: a stale or
-# repeated resume call must not be replayed against whatever the pipeline
-# has since moved on to.
-_pending_interrupt: dict[str, str] = {}
-
-# Live WebSocket connections from the merchant dashboard (Day 12) — same
-# "process-local set of sockets, best-effort push" shape as server/app.py's
-# _connections, just many-to-one (every open dashboard tab) instead of
-# one-per-thread_id.
-_merchant_connections: set[WebSocket] = set()
-
-
-async def _broadcast_merchant(event: dict) -> None:
-    """
-    Best-effort push to every open merchant-dashboard socket. Events carry
-    no payload beyond what changed (e.g. {"type": "pending_approval_created",
-    "order_id": ...}) — the dashboard reacts by re-fetching the relevant
-    REST snapshot, so this function doesn't need to duplicate the
-    list_pending_approval_requests() join shape.
-    """
-    for ws in list(_merchant_connections):
-        try:
-            await ws.send_json(event)
-        except Exception:
-            _merchant_connections.discard(ws)
 
 
 def _synthetic_captured_webhook(razorpay_order_id: str, amount: Optional[float]) -> dict:
@@ -165,35 +121,33 @@ def _synthetic_captured_webhook(razorpay_order_id: str, amount: Optional[float])
 
 async def _advance_and_summarize(thread_id: str, order_id: Optional[int], result: dict) -> dict:
     """
-    Shared by checkout() and resolve_pending_approval(): turns
-    whatever run_pipeline()/resume_pipeline() just returned into one of the
-    three outcomes an external agent needs to tell apart — completed,
-    pending_approval (with the approval_request id), or failed (with a
-    reason) — auto-advancing through the webhook pause (see module
-    docstring) rather than leaving that as a fourth, ambiguous state.
+    Shared by checkout(): turns whatever run_pipeline()/resume_pipeline()
+    just returned into one of the two outcomes an external agent needs to
+    tell apart — completed, or failed (with a reason) — auto-advancing
+    through the webhook pause (see module docstring) rather than leaving
+    that as a third, ambiguous state.
     """
     interrupts = result.get("__interrupt__")
     if interrupts:
         value = interrupts[0].value
         itype = value.get("type") if isinstance(value, dict) else None
-        _pending_interrupt[thread_id] = itype
-        if order_id is not None:
-            _order_to_thread[order_id] = thread_id
-
-        if itype == "merchant_approval_required":
-            return {
-                "outcome": "pending_approval",
-                "order_id": order_id,
-                "approval_request_id": value["approval_request_id"],
-                "amount": value["amount"],
-                "threshold": value["threshold"],
-                "message": value["message"],
-            }
 
         if itype == "webhook_required":
             payload = _synthetic_captured_webhook(value["razorpay_order_id"], result.get("amount"))
             next_result = await asyncio.to_thread(resume_pipeline, thread_id, payload)
             return await _advance_and_summarize(thread_id, order_id, next_result)
+
+        if itype == "merchant_approval_required":
+            # ai_agent purchase over the merchant's approval_required_above —
+            # not a failure, just not resolved yet. The AI agent polls
+            # check_order_status (still "pending_approval") until a merchant
+            # resolves approval_request_id via /merchant/resolve-approval.
+            return {
+                "outcome": "pending_approval",
+                "order_id": order_id,
+                "approval_request_id": value.get("approval_request_id"),
+                "reason": value.get("message"),
+            }
 
         # human_confirm_required should never occur for an ai_agent purchase
         # (see authorization_node) — surfaced as a failure rather than
@@ -203,8 +157,6 @@ async def _advance_and_summarize(thread_id: str, order_id: Optional[int], result
             "order_id": order_id,
             "reason": f"unexpected interrupt type {itype!r} for an ai_agent purchase",
         }
-
-    _pending_interrupt.pop(thread_id, None)
 
     if result.get("final_status") == "completed":
         return {
@@ -265,6 +217,7 @@ async def search_catalog(
             "stock": p.stock,
             "semantic_description": p.semantic_description,
             "structured_attributes": p.structured_attributes,
+            "image_url": p.image_url,
             "score": round(p.score, 4),
         }
         for p in products
@@ -286,9 +239,8 @@ async def checkout(product_id: int, quantity: int = 1) -> dict:
     Buy `quantity` of `product_id` as the seeded AI buyer agent. Runs the
     exact same checkout pipeline Front Door 1 uses (run_pipeline over
     intent -> retrieve -> recommend -> policy_check -> authorization ->
-    razorpay -> verification). Returns one of three outcomes: "completed",
-    "pending_approval" (with approval_request_id — poll check_order_status
-    until a merchant resolves it), or "failed" (with a reason).
+    razorpay -> verification). Returns one of two outcomes: "completed", or
+    "failed" (with a reason).
     """
     product = await asyncio.to_thread(get_product_detail, product_id)
     if product is None:
@@ -314,15 +266,12 @@ async def checkout(product_id: int, quantity: int = 1) -> dict:
     }
     result = await asyncio.to_thread(run_pipeline, initial_state, thread_id)
     order_id = result.get("order_id")
-    summary = await _advance_and_summarize(thread_id, order_id, result)
-    if summary.get("outcome") == "pending_approval":
-        await _broadcast_merchant({"type": "pending_approval_created", "order_id": order_id})
-    return summary
+    return await _advance_and_summarize(thread_id, order_id, result)
 
 
 @mcp.tool()
 async def check_order_status(order_id: int) -> dict:
-    """Current status of a previously placed order — for polling after pending_approval."""
+    """Current status of a previously placed order."""
     order = await asyncio.to_thread(get_order, order_id)
     return {
         "order_id": order["id"],
@@ -333,115 +282,127 @@ async def check_order_status(order_id: int) -> dict:
     }
 
 
-async def resolve_pending_approval(
-    order_id: int, approved: bool, resolved_by: str = "merchant_dashboard"
-) -> dict:
-    """
-    MERCHANT-ONLY: resolves a pending merchant-approval request for
-    order_id by resuming the paused pipeline with the given decision.
-
-    Deliberately a plain function, not an @mcp.tool() — see the module
-    docstring's "Process-boundary note". It's called in-process, only from
-    merchant_router's /resolve-approval handler below (the merchant
-    dashboard's backend), which runs in this same process/ASGI app so it
-    can see _order_to_thread/_pending_interrupt and share GRAPH's
-    InMemorySaver. No MCP tool wraps this, so no MCP client — including an
-    AI buyer — can reach it.
-    """
-    thread_id = _order_to_thread.get(order_id)
-    if thread_id is None:
-        return {
-            "outcome": "error",
-            "reason": f"no in-progress MCP checkout found for order_id={order_id} in this server process",
-        }
-    if _pending_interrupt.get(thread_id) != "merchant_approval_required":
-        return {
-            "outcome": "error",
-            "reason": (
-                f"order_id={order_id} is not currently awaiting merchant approval "
-                f"(pending={_pending_interrupt.get(thread_id)!r})"
-            ),
-        }
-
-    resume_value = {"approved": approved, "resolved_by": resolved_by}
-    result = await asyncio.to_thread(resume_pipeline, thread_id, resume_value)
-    return await _advance_and_summarize(thread_id, order_id, result)
-
-
 # ---------------------------------------------------------------------------
-# Merchant dashboard HTTP/WS surface (Day 12) — mounted into this same
-# process/ASGI app by build_http_app() below, alongside the MCP transport,
-# so its handlers can call resolve_pending_approval() and the other
-# in-process state above directly. Plain FastAPI routes, not MCP tools: an
-# MCP client only ever sees whatever main.list_tools() exposes, and none of
-# these are registered there.
+# Merchant dashboard HTTP surface (Day 12) — mounted into this same
+# process/ASGI app by build_http_app() below, alongside the MCP transport.
+# Plain FastAPI routes, not MCP tools: an MCP client only ever sees whatever
+# main.list_tools() exposes, and none of these are registered there.
 # ---------------------------------------------------------------------------
 
 merchant_router = APIRouter()
 
 
+class LoginBody(BaseModel):
+    email: str
+    password: str
+
+
+class StockAdjustBody(BaseModel):
+    delta: int
+
+
 class ResolveApprovalBody(BaseModel):
-    order_id: int
     approved: bool
-    resolved_by: str = "merchant_dashboard"
 
 
-@merchant_router.get("/pending-approvals")
-async def get_pending_approvals() -> list[dict]:
-    approvals = await asyncio.to_thread(list_pending_approval_requests)
-    policy = await asyncio.to_thread(get_merchant_policy)
-    threshold = float(policy["approval_required_above"])
-    for a in approvals:
-        a["threshold"] = threshold
-    return approvals
+@merchant_router.post("/login")
+async def post_login(body: LoginBody, response: Response) -> dict:
+    merchant = await asyncio.to_thread(get_merchant_by_email, body.email)
+    if merchant is None or not verify_password(body.password, merchant["password_hash"]):
+        raise HTTPException(status_code=401, detail="invalid email or password")
+    token = create_session_token(merchant["id"], merchant["email"])
+    response.set_cookie(
+        key=COOKIE_NAME,
+        value=token,
+        httponly=True,
+        samesite="lax",
+        secure=False,  # local dev over http; flip to True behind https in prod
+        max_age=TOKEN_TTL_SECONDS,
+    )
+    return {"id": merchant["id"], "name": merchant["name"], "email": merchant["email"]}
 
 
-@merchant_router.post("/resolve-approval")
-async def post_resolve_approval(body: ResolveApprovalBody) -> dict:
-    result = await resolve_pending_approval(body.order_id, body.approved, body.resolved_by)
-    if result.get("outcome") != "error":
-        await _broadcast_merchant({"type": "approval_resolved", "order_id": body.order_id})
-    return result
+@merchant_router.post("/logout")
+async def post_logout(response: Response) -> dict:
+    response.delete_cookie(key=COOKIE_NAME)
+    return {"ok": True}
+
+
+@merchant_router.get("/me")
+async def get_me(current: dict = Depends(get_current_merchant)) -> dict:
+    return current
 
 
 @merchant_router.get("/audit-trail")
-async def get_audit_trail_all() -> list[dict]:
-    return await asyncio.to_thread(get_full_audit_trail)
+async def get_audit_trail_all(current: dict = Depends(get_current_merchant)) -> list[dict]:
+    return await asyncio.to_thread(get_full_audit_trail, current["id"])
 
 
 @merchant_router.get("/agents")
-async def get_agents() -> list[dict]:
+async def get_agents(current: dict = Depends(get_current_merchant)) -> list[dict]:
     return await asyncio.to_thread(list_agents)
 
 
-@merchant_router.websocket("/ws")
-async def merchant_ws(websocket: WebSocket) -> None:
+@merchant_router.get("/products")
+async def get_products(current: dict = Depends(get_current_merchant)) -> list[dict]:
+    return await asyncio.to_thread(list_products_for_merchant, current["id"])
+
+
+@merchant_router.post("/products/{product_id}/stock")
+async def post_adjust_stock(
+    product_id: int, body: StockAdjustBody, current: dict = Depends(get_current_merchant)
+) -> dict:
+    updated = await asyncio.to_thread(adjust_product_stock, product_id, current["id"], body.delta)
+    if updated is None:
+        raise HTTPException(status_code=404, detail=f"no product {product_id} for this merchant")
+    return updated
+
+
+@merchant_router.get("/pending-approvals")
+async def get_pending_approvals(current: dict = Depends(get_current_merchant)) -> list[dict]:
+    return await asyncio.to_thread(list_pending_approvals_for_merchant, current["id"])
+
+
+@merchant_router.post("/resolve-approval/{approval_id}")
+async def post_resolve_approval(
+    approval_id: int, body: ResolveApprovalBody, current: dict = Depends(get_current_merchant)
+) -> dict:
     """
-    Live-update channel for the pending-approvals panel: pushes a bare
-    {"type": ...} event whenever a new approval is created (checkout()
-    above) or one is resolved (post_resolve_approval above); the dashboard
-    reacts by re-fetching GET /merchant/pending-approvals. Same "socket
-    just for push notifications" pattern as server/app.py's audit-streaming
-    websocket, minus the request/response chat traffic that socket also
-    carries — this one never receives anything meaningful from the client.
+    Approve/reject an over-threshold ai_agent purchase paused at
+    authorization_node — the only way any paused order ever resolves (see
+    pipeline/graph.py's authorization_node and this module's docstring on
+    the self-approval boundary: this is a plain FastAPI route, not
+    registered as an MCP tool, so no MCP client can ever call it).
+
+    Merchant-scoped like every other /merchant/* route: 404s (not 403s, so
+    as not to confirm the approval_request even exists) if the order behind
+    approval_id doesn't belong to the logged-in merchant.
     """
-    await websocket.accept()
-    _merchant_connections.add(websocket)
     try:
-        while True:
-            await websocket.receive_text()
-    except WebSocketDisconnect:
-        pass
-    finally:
-        _merchant_connections.discard(websocket)
+        approval = await asyncio.to_thread(get_approval_request, approval_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail=f"no pending approval #{approval_id} for this merchant")
+
+    order = await asyncio.to_thread(get_order, approval["order_id"])
+    if order["merchant_id"] != current["id"]:
+        raise HTTPException(status_code=404, detail=f"no pending approval #{approval_id} for this merchant")
+    if approval["status"] != "pending":
+        raise HTTPException(
+            status_code=409, detail=f"approval_request #{approval_id} already resolved (status={approval['status']})"
+        )
+    if order["thread_id"] is None:
+        raise HTTPException(status_code=500, detail=f"order #{order['id']} has no recorded thread_id to resume")
+
+    resume_value = {"approved": body.approved, "resolved_by": current["email"]}
+    result = await asyncio.to_thread(resume_pipeline, order["thread_id"], resume_value)
+    return await _advance_and_summarize(order["thread_id"], order["id"], result)
 
 
 def build_http_app() -> FastAPI:
     """
     Combines FastMCP's streamable-http ASGI app (serving /mcp) with
     merchant_router (serving /merchant/*) into one FastAPI app on one port,
-    so both run in the same process — required for resolve_pending_approval
-    to see state written by checkout() (see module docstring).
+    so both run in the same process/port for convenience.
     """
     # Day 13: same reasoning as server/app.py's ALLOWED_ORIGINS — the
     # deployed frontend's origin isn't known at code-writing time, so it's
@@ -460,6 +421,9 @@ def build_http_app() -> FastAPI:
         allow_origins=allowed_origins,
         allow_methods=["*"],
         allow_headers=["*"],
+        allow_credentials=True,  # Phase 2: the merchant session cookie is
+        # cross-origin (dashboard on :5173, this API on :8765), and browsers
+        # drop credentialed requests/responses without this.
     )
     app.include_router(merchant_router, prefix="/merchant")
     app.mount("/", mcp_asgi_app)

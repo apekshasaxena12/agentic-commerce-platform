@@ -69,7 +69,7 @@ def get_audit_trail(order_id: int) -> list[dict]:
     ]
 
 
-def get_full_audit_trail() -> list[dict]:
+def get_full_audit_trail(merchant_id: Optional[int] = None) -> list[dict]:
     """
     audit_log_entry rows across ALL orders, joined with each order's status/
     amount/items and the requesting agent's name/type — the merchant
@@ -81,19 +81,29 @@ def get_full_audit_trail() -> list[dict]:
     single unfiltered query is simpler than a parameterized one. Inner-joins
     orders, so pure-browsing audit rows (order_id IS NULL, see migration
     0003) are correctly excluded — they belong to no order's trail.
+
+    Phase 2 multi-tenant: merchant_id, when given, scopes this to that
+    merchant's own orders only (o.merchant_id = %s) — the merchant dashboard
+    passes the logged-in merchant's id so one merchant never sees another's
+    audit rows; omitted, this stays the old cross-merchant behavior for any
+    other caller.
     """
+    query = """
+        SELECT a.id, a.order_id, a.step, a."timestamp", a.input_summary,
+               a.output_summary, a.reasoning_text,
+               o.status, o.amount, o.items, o.agent_id, ag.name, ag.type
+        FROM audit_log_entry a
+        JOIN orders o ON o.id = a.order_id
+        JOIN agent ag ON ag.id = o.agent_id
+    """
+    params: tuple = ()
+    if merchant_id is not None:
+        query += " WHERE o.merchant_id = %s"
+        params = (merchant_id,)
+    query += " ORDER BY a.order_id, a.id"
+
     with psycopg.connect(get_database_url()) as conn:
-        rows = conn.execute(
-            """
-            SELECT a.id, a.order_id, a.step, a."timestamp", a.input_summary,
-                   a.output_summary, a.reasoning_text,
-                   o.status, o.amount, o.items, o.agent_id, ag.name, ag.type
-            FROM audit_log_entry a
-            JOIN orders o ON o.id = a.order_id
-            JOIN agent ag ON ag.id = o.agent_id
-            ORDER BY a.order_id, a.id
-            """
-        ).fetchall()
+        rows = conn.execute(query, params).fetchall()
     return [
         {
             "id": r[0],

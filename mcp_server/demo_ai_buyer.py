@@ -54,8 +54,15 @@ from db.connection import get_database_url  # noqa: E402
 
 PORT = 8765
 URL = f"http://127.0.0.1:{PORT}/mcp"
+MERCHANT_API = f"http://127.0.0.1:{PORT}/merchant"
 
 AI_AGENT_ID = 6  # "Shopping Assistant Agent" — see mcp_server/server.py's AI_AGENT_ID note
+
+# owner@shopfrontrunning.com owns the Windproof Running Jacket (merchant #1,
+# see db/seed_merchant_credentials.py) — the merchant who must resolve
+# scenario (b)'s pending approval.
+MERCHANT_EMAIL = "owner@shopfrontrunning.com"
+MERCHANT_PASSWORD = "RunningCo#2026"
 
 UNDER_THRESHOLD_QUERY = "Compression Running Tights"
 OVER_THRESHOLD_QUERY = "Windproof Running Jacket"
@@ -145,30 +152,31 @@ async def scenario_b_over_threshold(session: ClientSession) -> None:
     assert checkout_outcome["outcome"] == "pending_approval", f"expected pending_approval, got {checkout_outcome}"
     order_id = checkout_outcome["order_id"]
     approval_id = checkout_outcome["approval_request_id"]
-    print(f"\nAI buyer got pending_approval for order #{order_id} (approval_request #{approval_id}) — cannot proceed alone.")
+    print(f"\nAI buyer's over-threshold purchase (order #{order_id}) is paused: approval_request #{approval_id}.")
 
-    poll1 = await call(session, "check_order_status", {"order_id": order_id})
-    assert poll1["status"] == "pending_approval", f"expected still pending, got {poll1}"
-    print("\nAI buyer polled check_order_status — still pending_approval, as expected (no human has acted yet).")
+    poll = await call(session, "check_order_status", {"order_id": order_id})
+    assert poll["status"] == "pending_approval", f"expected pending_approval, got {poll}"
+    print("\nconfirmed: check_order_status agrees -> still pending_approval (no self-approval by the buyer itself).")
 
-    print(f"\n--- merchant-side: POST /merchant/resolve-approval for order #{order_id} (Day 12 dashboard API) ---")
-    # Long timeout: resolving replays real Razorpay order creation + a
-    # synthetic webhook resume (see mcp_server/server.py's
-    # _synthetic_captured_webhook) inside this one request, which involves
-    # real network calls to Razorpay's test-mode API.
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        resp = await client.post(
-            f"http://127.0.0.1:{PORT}/merchant/resolve-approval",
-            json={"order_id": order_id, "approved": True, "resolved_by": "demo_merchant"},
-        )
-    resp.raise_for_status()
-    merchant_result = resp.json()
-    print(json.dumps(merchant_result, indent=2))
-    assert merchant_result["outcome"] == "completed", f"expected merchant approval to complete the order, got {merchant_result}"
+    print(
+        "\n(logging in as the merchant and resolving via HTTP — the merchant-side half of the "
+        "self-approval boundary; this script's own MCP ClientSession has no tool that can do this)"
+    )
+    # Generous timeout: resolving an approval synchronously drives the rest
+    # of the pipeline (a real Razorpay order-create call, then the
+    # synthetic-webhook resume through verification), not just a DB write.
+    async with httpx.AsyncClient(base_url=MERCHANT_API, timeout=30.0) as http:
+        login = await http.post("/login", json={"email": MERCHANT_EMAIL, "password": MERCHANT_PASSWORD})
+        login.raise_for_status()
+        resolve = await http.post(f"/resolve-approval/{approval_id}", json={"approved": True})
+        resolve.raise_for_status()
+        resolution = resolve.json()
+    print(f"POST /merchant/resolve-approval/{approval_id} -> {resolution}")
+    assert resolution["outcome"] == "completed", f"expected completed after merchant approval, got {resolution}"
 
     poll2 = await call(session, "check_order_status", {"order_id": order_id})
-    assert poll2["status"] == "completed", f"expected completed after merchant approval, got {poll2}"
-    print("\nCONFIRMED: AI buyer polled again after the merchant's separate approval process ran -> completed.")
+    assert poll2["status"] == "completed", f"expected completed, got {poll2}"
+    print("\nCONFIRMED: merchant approval resolved the pause -> check_order_status agrees -> completed.")
 
 
 async def main_async() -> None:

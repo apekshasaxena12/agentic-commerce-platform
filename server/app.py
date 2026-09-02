@@ -38,6 +38,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
+from catalog.retrieval import get_product_detail, search_products
 from pipeline.graph import resume_pipeline, run_pipeline
 
 load_dotenv()
@@ -119,6 +120,14 @@ async def ws_chat(websocket: WebSocket) -> None:
 
             if msg_type == "message":
                 await _handle_message(websocket, thread_id, data.get("text", ""))
+            elif msg_type == "checkout_product":
+                await _handle_checkout_product(
+                    websocket, thread_id, data.get("product_id"), data.get("quantity", 1)
+                )
+            elif msg_type == "checkout_cart":
+                await _handle_checkout_cart(websocket, thread_id, data.get("items") or [])
+            elif msg_type == "browse":
+                await _handle_browse(websocket, data.get("filters") or {})
             elif msg_type == "confirm":
                 await _handle_confirm(websocket, thread_id, data.get("decision", "confirm"))
             elif msg_type == "checkout_outcome":
@@ -134,9 +143,121 @@ async def ws_chat(websocket: WebSocket) -> None:
         _pending_interrupt.pop(thread_id, None)
 
 
+def _serialize_products(results) -> list[dict]:
+    # Mirrors pipeline/graph.py's _retrieve_impl serialization exactly, so
+    # the frontend's ProductCard/search_results handling works unchanged
+    # regardless of which path produced the results.
+    return [
+        {
+            "id": p.id,
+            "name": p.name,
+            "category": p.category,
+            "price": float(p.price),
+            "stock": p.stock,
+            "score": p.score,
+            "image_url": p.image_url,
+            "merchant_name": p.merchant_name,
+        }
+        for p in results
+    ]
+
+
+@app.get("/api/products/{product_id}")
+async def get_product(product_id: int) -> dict:
+    # Backs the product detail modal. Both pieces of cross-catalog data it
+    # needs are reused verbatim from existing lookups, no new retrieval
+    # logic: "similar items" is the same search_products() the retrieve
+    # node calls (filtered to this product's category, self excluded), and
+    # "you might also like" is get_product_detail's cross_sell list, which
+    # already reads co_purchase_stat the same way _recommend_impl does.
+    detail = await anyio.to_thread.run_sync(get_product_detail, product_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="product not found")
+
+    similar_raw = await anyio.to_thread.run_sync(
+        functools.partial(
+            search_products, detail["semantic_description"], {"category": detail["category"]}, 6
+        )
+    )
+    similar_items = [p for p in _serialize_products(similar_raw) if p["id"] != product_id][:5]
+
+    return {**detail, "similar_items": similar_items, "recommendations": detail["cross_sell"]}
+
+
+async def _handle_browse(websocket: WebSocket, filters: dict) -> None:
+    # A pure catalog browse driven by a real structured filter (e.g. the
+    # gender toggle) rather than free text — no intent classification
+    # needed since the filter is already explicit, so this bypasses
+    # run_pipeline entirely (no order, no checkout, nothing to authorize).
+    # Deliberately doesn't log to the audit trail: it's a read with no
+    # order attached, same as how browsing-only pipeline runs already
+    # don't appear in the merchant dashboard's per-order audit view.
+    results = await anyio.to_thread.run_sync(
+        functools.partial(search_products, "running gear and apparel", filters, 10)
+    )
+    await websocket.send_json({"type": "search_results", "results": _serialize_products(results)})
+    await websocket.send_json({"type": "turn_complete"})
+
+
 async def _handle_message(websocket: WebSocket, thread_id: str, text: str) -> None:
     initial_state = {
         "user_message": text,
+        "agent_id": HUMAN_AGENT_ID,
+        "payment_method": "card",
+        "discount_pct": 0,
+    }
+    on_audit = _make_on_audit(thread_id)
+    result = await anyio.to_thread.run_sync(
+        functools.partial(run_pipeline, initial_state, thread_id, on_audit)
+    )
+    await _emit_result(websocket, thread_id, result)
+
+
+async def _handle_checkout_product(
+    websocket: WebSocket, thread_id: str, product_id: Optional[int], quantity: int
+) -> None:
+    # Cart checkout: the product_id is already known (picked from search
+    # results earlier, or from the product modal), so this skips straight
+    # to pipeline/graph.py's product_id-aware intent/retrieve branch
+    # instead of re-running text search via _handle_message — same
+    # downstream pipeline (recommend/policy_check/authorization/razorpay/
+    # verification), same _emit_result handling either way.
+    if product_id is None:
+        await websocket.send_json({"type": "error", "message": "checkout_product requires a product_id"})
+        await websocket.send_json({"type": "turn_complete"})
+        return
+
+    initial_state = {
+        "product_id": product_id,
+        "quantity": quantity,
+        "agent_id": HUMAN_AGENT_ID,
+        "payment_method": "card",
+        "discount_pct": 0,
+    }
+    on_audit = _make_on_audit(thread_id)
+    result = await anyio.to_thread.run_sync(
+        functools.partial(run_pipeline, initial_state, thread_id, on_audit)
+    )
+    await _emit_result(websocket, thread_id, result)
+
+
+async def _handle_checkout_cart(websocket: WebSocket, thread_id: str, items: list[dict]) -> None:
+    # Combined cart checkout: every {product_id, quantity} pair bills as
+    # ONE order — pipeline/graph.py's cart_items-aware intent/retrieve
+    # branch creates a single order covering all of them, so
+    # policy_check/authorization/razorpay/verification each run exactly
+    # once for the whole cart (unmodified — same nodes _handle_message and
+    # _handle_checkout_product already go through). Chosen deliberately
+    # over per-item checkout: simpler for the shopper (one confirm, one
+    # payment), at the cost of losing per-item failure isolation — if this
+    # one payment fails, the whole cart fails together.
+    if not items:
+        await websocket.send_json({"type": "error", "message": "checkout_cart requires at least one item"})
+        await websocket.send_json({"type": "turn_complete"})
+        return
+
+    initial_state = {
+        "cart_items": items,
         "agent_id": HUMAN_AGENT_ID,
         "payment_method": "card",
         "discount_pct": 0,
@@ -292,6 +413,22 @@ async def _emit_result(websocket: WebSocket, thread_id: str, result: dict) -> No
         elif result.get("authorized") is False:
             await websocket.send_json(
                 {"type": "order_failed", "reason": result.get("authorization_reason")}
+            )
+        elif result.get("policy_passed") is False:
+            # route_after_policy_check sends a failed check straight to END —
+            # the graph never reaches authorization, so `authorized` above is
+            # never set (state key doesn't exist, not merely False). Without
+            # this branch a policy rejection (bad discount, disallowed
+            # payment method, or here: insufficient budget) produced no
+            # client-visible signal at all — just a re-sent search_results
+            # and turn_complete, indistinguishable from nothing having
+            # happened, which is exactly what made a checkout intent look
+            # like it silently "never reaches confirm."
+            failed_reasons = "; ".join(
+                c["reason"] for c in result.get("policy_checks", []) if not c.get("passed")
+            )
+            await websocket.send_json(
+                {"type": "order_failed", "reason": failed_reasons or "Order did not pass policy checks."}
             )
 
     await websocket.send_json({"type": "turn_complete"})

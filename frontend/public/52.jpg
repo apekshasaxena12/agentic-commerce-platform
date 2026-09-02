@@ -1,0 +1,54 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 240" width="100%" height="100%">
+  <defs>
+    <linearGradient id="grad_52" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#1e1b4b" />
+      <stop offset="100%" stop-color="#a855f7" stop-opacity="0.3" />
+    </linearGradient>
+    <filter id="glow_52" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="15" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <!-- Card Background -->
+  <rect width="300" height="240" rx="16" fill="url(#grad_52)" />
+  
+  <!-- Subtle Grid Pattern -->
+  <g opacity="0.08" stroke="#ffffff" stroke-width="1">
+    <line x1="0" y1="60" x2="300" y2="60" />
+    <line x1="0" y1="120" x2="300" y2="120" />
+    <line x1="0" y1="180" x2="300" y2="180" />
+    <line x1="75" y1="0" x2="75" y2="240" />
+    <line x1="150" y1="0" x2="150" y2="240" />
+    <line x1="225" y1="0" x2="225" y2="240" />
+  </g>
+
+  <!-- Ambient Light Circle -->
+  <circle cx="150" cy="110" r="60" fill="#a855f7" opacity="0.18" filter="url(#glow_52)" />
+
+  <!-- Badge / Brand Tag -->
+  <g transform="translate(16, 16)">
+    <rect width="106.0" height="22" rx="11" fill="#ffffff" fill-opacity="0.15" />
+    <text x="53.0" y="15" fill="#ffffff" font-family="system-ui, -apple-system, sans-serif" font-size="10" font-weight="600" text-anchor="middle" letter-spacing="0.03em">Calf Support</text>
+  </g>
+
+  <!-- Category Pill -->
+  <g transform="translate(284, 16)">
+    <text x="0" y="15" fill="#a855f7" font-family="ui-monospace, monospace" font-size="9" font-weight="600" text-anchor="end" text-transform="uppercase" letter-spacing="0.05em">accessories</text>
+  </g>
+
+  <!-- Product Artwork Graphic -->
+  
+        <!-- Socks / Sleeves Graphic -->
+        <g transform="translate(85, 45) scale(1.1)">
+            <path d="M35 15 L75 15 C80 15 85 20 85 28 L85 85 C85 105 110 115 115 125 C120 135 110 145 95 145 C70 145 45 130 35 115 L35 25 C35 18 40 15 45 15 Z" fill="#a855f7" fill-opacity="0.3"/>
+            <path d="M40 20 L75 20 C78 20 80 23 80 28 L80 80 C80 98 102 108 106 116 C110 124 102 132 90 132 C68 132 48 118 40 105 L40 28 C40 23 43 20 46 20 Z" fill="#a855f7"/>
+            <line x1="40" y1="35" x2="80" y2="35" stroke="#ffffff" stroke-width="3" stroke-linecap="round"/>
+            <line x1="40" y1="45" x2="80" y2="45" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-opacity="0.7"/>
+            <path d="M40 85 Q60 90 80 85" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-opacity="0.8"/>
+        </g>
+        
+
+  <!-- Bottom Accent Line -->
+  <rect x="20" y="226" width="260" height="2" rx="1" fill="#a855f7" fill-opacity="0.4" />
+</svg>

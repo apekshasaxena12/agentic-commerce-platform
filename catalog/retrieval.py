@@ -72,6 +72,9 @@ class Product:
     semantic_description: str
     return_policy: Optional[str]
     substitute_ids: list[int]
+    image_url: Optional[str]
+    merchant_id: int
+    merchant_name: str
     score: float
     keyword_score: float
     semantic_score: float
@@ -100,19 +103,35 @@ def search_products(
     min_price = filters.get("min_price")
     max_price = filters.get("max_price")
     in_stock_only = bool(filters.get("in_stock_only", False))
+    # "women"/"men" match themselves plus "unisex" (a men's-only filter
+    # should never hide a unisex product, and vice versa); "unisex" matches
+    # only "unisex". Every seeded product now has a gender attribute.
+    gender = filters.get("gender")
+    # Optional — unset by default, so search spans every merchant's catalog
+    # (a unified marketplace search). Pass this to scope to one merchant
+    # (e.g. a future per-merchant storefront view); nothing today sets it.
+    merchant_id = filters.get("merchant_id")
 
     model = _get_model()
     query_vec_literal = _to_pgvector_literal(model.encode(query).tolist())
 
     sql = """
-        SELECT id, name, category, price, stock, structured_attributes,
-               semantic_description, return_policy, substitute_ids,
+        SELECT product.id, product.name, category, price, stock, structured_attributes,
+               semantic_description, return_policy, substitute_ids, image_url,
+               product.merchant_id, merchant.name,
                embedding <=> %(qvec)s::vector AS cosine_distance
         FROM product
+        JOIN merchant ON merchant.id = product.merchant_id
         WHERE (%(category)s::text IS NULL OR category = %(category)s)
           AND (%(min_price)s::numeric IS NULL OR price >= %(min_price)s)
           AND (%(max_price)s::numeric IS NULL OR price <= %(max_price)s)
           AND (%(in_stock_only)s = FALSE OR stock > 0)
+          AND (%(merchant_id)s::bigint IS NULL OR merchant_id = %(merchant_id)s)
+          AND (
+            %(gender)s::text IS NULL
+            OR structured_attributes->>'gender' = %(gender)s
+            OR structured_attributes->>'gender' = 'unisex'
+          )
     """
 
     with psycopg.connect(get_database_url()) as conn:
@@ -124,11 +143,13 @@ def search_products(
                 "min_price": min_price,
                 "max_price": max_price,
                 "in_stock_only": in_stock_only,
+                "gender": gender,
+                "merchant_id": merchant_id,
             },
         ).fetchall()
 
     results = []
-    for (pid, name, cat, price, stock, attrs, desc, policy, subs, distance) in rows:
+    for (pid, name, cat, price, stock, attrs, desc, policy, subs, img_url, m_id, m_name, distance) in rows:
         semantic_score = 1.0 - float(distance)
         keyword_score = _keyword_score(query, name, cat, desc)
         blended = KEYWORD_WEIGHT * keyword_score + SEMANTIC_WEIGHT * semantic_score
@@ -143,6 +164,9 @@ def search_products(
                 semantic_description=desc,
                 return_policy=policy,
                 substitute_ids=subs,
+                image_url=img_url,
+                merchant_id=m_id,
+                merchant_name=m_name,
                 score=blended,
                 keyword_score=keyword_score,
                 semantic_score=semantic_score,
@@ -163,19 +187,22 @@ def get_product_detail(product_id: int) -> Optional[dict]:
     with psycopg.connect(get_database_url()) as conn:
         row = conn.execute(
             """
-            SELECT id, name, category, price, stock, structured_attributes,
-                   semantic_description, return_policy, substitute_ids
-            FROM product WHERE id = %s
+            SELECT product.id, product.name, category, price, stock, structured_attributes,
+                   semantic_description, return_policy, substitute_ids, image_url,
+                   product.merchant_id, merchant.name
+            FROM product
+            JOIN merchant ON merchant.id = product.merchant_id
+            WHERE product.id = %s
             """,
             (product_id,),
         ).fetchone()
         if row is None:
             return None
-        (pid, name, category, price, stock, attrs, desc, policy, substitute_ids) = row
+        (pid, name, category, price, stock, attrs, desc, policy, substitute_ids, img_url, merchant_id, merchant_name) = row
 
         cross_sell_rows = conn.execute(
             """
-            SELECT cp.product_b_id, p.name, cp.co_purchase_rate
+            SELECT cp.product_b_id, p.name, cp.co_purchase_rate, p.price, p.image_url, p.category
             FROM co_purchase_stat cp
             JOIN product p ON p.id = cp.product_b_id
             WHERE cp.product_a_id = %s
@@ -202,9 +229,19 @@ def get_product_detail(product_id: int) -> Optional[dict]:
         "structured_attributes": attrs,
         "semantic_description": desc,
         "return_policy": policy,
+        "image_url": img_url,
+        "merchant_id": merchant_id,
+        "merchant_name": merchant_name,
         "cross_sell": [
-            {"product_id": b_id, "name": b_name, "co_purchase_rate": rate}
-            for (b_id, b_name, rate) in cross_sell_rows
+            {
+                "product_id": b_id,
+                "name": b_name,
+                "co_purchase_rate": rate,
+                "price": float(b_price),
+                "image_url": b_img_url,
+                "category": b_category,
+            }
+            for (b_id, b_name, rate, b_price, b_img_url, b_category) in cross_sell_rows
         ],
         "substitutes": [
             {"product_id": s_id, "name": s_name, "price": float(s_price)}

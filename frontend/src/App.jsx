@@ -1,254 +1,174 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import "./App.css";
+import { SendIcon } from "./icons.jsx";
 
-// Day 13: points at the deployed Render backend in production via a Vite
-// env var (VITE_WS_URL, set in Vercel's project settings); falls back to
-// localhost so nothing changes for local dev.
-const WS_URL = import.meta.env.VITE_WS_URL || "ws://localhost:8000/ws/chat";
+// The landing page is a pure entry point — it never talks to the
+// pipeline itself. Submitting a query here hands a payload to the results
+// page via sessionStorage and navigates there; the results page acts on
+// it once its own WebSocket connects. See Results.jsx.
+//
+// Two kinds of payload:
+//   - "message": free text (typed, a suggestion chip, or a category pill's
+//     canned phrase) — goes through the normal chat pipeline, same as
+//     before.
+//   - "browse": a real structured filter (currently just gender, since
+//     that's the one dimension every product now has cleanly) — sent
+//     straight to search_products, bypassing intent classification
+//     entirely, so it can't degrade into a canned-phrase guess.
+const PENDING_QUERY_KEY = "shopfront_pending_query";
 
-function ProductCard({ product }) {
-  return (
-    <div className="product-card">
-      <div className="product-image-placeholder">{product.category.slice(0, 1).toUpperCase()}</div>
-      <div className="product-name">{product.name}</div>
-      <div className="product-category">{product.category}</div>
-      <div className="product-price">₹{product.price}</div>
-    </div>
-  );
+function goToResults(text) {
+  sessionStorage.setItem(PENDING_QUERY_KEY, JSON.stringify({ kind: "message", text }));
+  window.location.href = "/results";
 }
 
-function AuditPanel({ entries }) {
-  return (
-    <div className="audit-panel">
-      <h3>Live audit trail</h3>
-      {entries.length === 0 && <p className="audit-empty">Nothing yet — send a message.</p>}
-      {entries.map((e) => (
-        <div key={e.id} className="audit-row">
-          <div className="audit-step">{e.step}</div>
-          <div className="audit-output">{e.output_summary}</div>
-          <div className="audit-reason">{e.reasoning_text}</div>
-        </div>
-      ))}
-    </div>
-  );
+function goToResultsBrowse(label, filters) {
+  sessionStorage.setItem(PENDING_QUERY_KEY, JSON.stringify({ kind: "browse", label, filters }));
+  window.location.href = "/results";
 }
 
-export default function App() {
-  const [messages, setMessages] = useState([]);
-  const [input, setInput] = useState("");
-  const [searchResults, setSearchResults] = useState([]);
-  const [recommendation, setRecommendation] = useState(null);
-  const [awaitingConfirm, setAwaitingConfirm] = useState(null);
-  const [auditEntries, setAuditEntries] = useState([]);
-  const [connected, setConnected] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const wsRef = useRef(null);
-  const checkoutInfoRef = useRef(null);
+// "Rewrites what you can ask" — types out each example query, pauses,
+// deletes it, and moves to the next, in place of a static placeholder.
+// Unmounts whenever the real input has text (see !input in the JSX below),
+// so it never overlaps what the user is typing.
+function prefersReducedMotion() {
+  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
+function TypewriterPlaceholder({ queries }) {
+  const [text, setText] = useState(() => (prefersReducedMotion() ? queries[0] : ""));
 
   useEffect(() => {
-    const ws = new WebSocket(WS_URL);
-    wsRef.current = ws;
-
-    ws.onopen = () => setConnected(true);
-    ws.onclose = () => setConnected(false);
-
-    ws.onmessage = (event) => {
-      const msg = JSON.parse(event.data);
-      switch (msg.type) {
-        case "connected":
-          break;
-        case "audit_entry":
-          setAuditEntries((prev) => [...prev, msg]);
-          break;
-        case "search_results":
-          setSearchResults(msg.results);
-          if (msg.results.length > 0) {
-            addMessage("system", `Found ${msg.results.length} matching product(s).`);
-          } else {
-            addMessage("system", "No matching products found.");
-          }
-          break;
-        case "recommendation":
-          setRecommendation(msg);
-          break;
-        case "awaiting_confirm":
-          setAwaitingConfirm({ order_id: msg.order_id, amount: msg.amount });
-          addMessage("system", `Ready to confirm order #${msg.order_id} for ₹${msg.amount}.`);
-          break;
-        case "start_checkout":
-          setAwaitingConfirm(null);
-          checkoutInfoRef.current = msg;
-          addMessage("system", `Order created (razorpay_order_id=${msg.razorpay_order_id}). Opening Checkout...`);
-          openRazorpayCheckout(msg);
-          break;
-        case "final_status":
-          addMessage("system", `Order status: ${msg.status}.`);
-          break;
-        case "order_failed":
-          addMessage("system", `Order rejected: ${msg.reason}`);
-          setAwaitingConfirm(null);
-          break;
-        case "paused":
-          addMessage("system", `Pipeline paused: ${JSON.stringify(msg.detail)}`);
-          break;
-        case "turn_complete":
-          setBusy(false);
-          break;
-        case "error":
-          addMessage("system", `Error: ${msg.message}`);
-          setBusy(false);
-          break;
-        default:
-          break;
-      }
-    };
-
-    return () => ws.close();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  function addMessage(role, text) {
-    setMessages((prev) => [...prev, { role, text, id: prev.length }]);
-  }
-
-  function send(payload) {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify(payload));
-    }
-  }
-
-  function sendMessage() {
-    if (!input.trim() || busy) return;
-    addMessage("user", input);
-    setSearchResults([]);
-    setRecommendation(null);
-    setBusy(true);
-    send({ type: "message", text: input });
-    setInput("");
-  }
-
-  function sendConfirm(decision) {
-    // Hide the confirm box immediately (optimistic), not just after the
-    // server round-trip — otherwise a fast double-click can fire "confirm"
-    // twice before the button disappears. The backend also now guards
-    // against a duplicate/stale confirm being misapplied, but this fixes
-    // the actual trigger.
-    setAwaitingConfirm(null);
-    setBusy(true);
-    send({ type: "confirm", decision });
-  }
-
-  function openRazorpayCheckout({ order_id, razorpay_order_id, amount, key_id }) {
-    if (!window.Razorpay) {
-      addMessage("system", "Razorpay Checkout.js did not load — check your network/CDN access.");
+    if (prefersReducedMotion()) {
       return;
     }
-    const amountPaise = Math.round(amount * 100);
-
-    const options = {
-      key: key_id,
-      amount: amountPaise,
-      currency: "INR",
-      name: "Agentic Commerce Demo",
-      description: `Order #${order_id}`,
-      order_id: razorpay_order_id,
-      handler: function (response) {
-        addMessage("system", `Checkout succeeded: payment_id=${response.razorpay_payment_id}`);
-        send({
-          type: "checkout_outcome",
-          status: "captured",
-          razorpay_payment_id: response.razorpay_payment_id,
-          razorpay_order_id: response.razorpay_order_id,
-          amount_paise: amountPaise,
-        });
-      },
-      modal: {
-        ondismiss: function () {
-          addMessage("system", "Checkout closed without completing payment.");
-        },
-      },
-      theme: { color: "#3399cc" },
+    const state = { queryIndex: 0, charIndex: 0, deleting: false };
+    let timeoutId;
+    const tick = () => {
+      const current = queries[state.queryIndex];
+      if (!state.deleting) {
+        state.charIndex += 1;
+        setText(current.slice(0, state.charIndex));
+        if (state.charIndex === current.length) {
+          state.deleting = true;
+          timeoutId = setTimeout(tick, 1500);
+          return;
+        }
+        timeoutId = setTimeout(tick, 35);
+      } else {
+        state.charIndex -= 1;
+        setText(current.slice(0, state.charIndex));
+        if (state.charIndex === 0) {
+          state.deleting = false;
+          state.queryIndex = (state.queryIndex + 1) % queries.length;
+          timeoutId = setTimeout(tick, 400);
+          return;
+        }
+        timeoutId = setTimeout(tick, 18);
+      }
     };
+    timeoutId = setTimeout(tick, 500);
+    return () => clearTimeout(timeoutId);
+  }, [queries]);
 
-    const rzp = new window.Razorpay(options);
-    rzp.on("payment.failed", function (response) {
-      const err = response.error || {};
-      addMessage(
-        "system",
-        `Checkout REAL decline: code=${err.code} reason=${err.reason} description=${err.description}`
-      );
-      send({
-        type: "checkout_outcome",
-        status: "failed",
-        razorpay_payment_id: err.metadata && err.metadata.payment_id,
-        razorpay_order_id: (err.metadata && err.metadata.order_id) || razorpay_order_id,
-        amount_paise: amountPaise,
-        error: {
-          code: err.code,
-          description: err.description,
-          source: err.source,
-          step: err.step,
-          reason: err.reason,
-        },
-      });
-    });
-    rzp.open();
+  return (
+    <div className="chatbox-placeholder" aria-hidden="true">
+      {text}
+      <span className="chatbox-caret" />
+    </div>
+  );
+}
+
+// A separate toggle group from category, not a replacement: every product
+// now has a real gender attribute (unlike the 9-value category enum, which
+// doesn't collapse into one clean UI dimension), so this filters on it
+// directly via the "browse" WS path above instead of a canned phrase.
+const GENDER_TOGGLES = [
+  { key: "women", label: "Women", filters: { gender: "women" } },
+  { key: "men", label: "Men", filters: { gender: "men" } },
+];
+
+const SUGGESTION_CHIPS = [
+  "Waterproof trail running shoes under ₹6,000",
+  "Compression socks for long runs",
+  "Insoles for flat feet",
+  "Running shorts with a zip pocket",
+  "Windproof jacket for early morning runs",
+  "GPS running watch under ₹5,000",
+];
+
+export default function App() {
+  const [input, setInput] = useState("");
+  const [activeGender, setActiveGender] = useState(null);
+
+  function submitQuery(text) {
+    const trimmed = text.trim();
+    if (!trimmed) return;
+    goToResults(trimmed);
+  }
+
+  function selectGender(toggle) {
+    setActiveGender(toggle.key);
+    goToResultsBrowse(toggle.label, toggle.filters);
   }
 
   return (
     <div className="app">
-      <div className="main-column">
-        <h1>Agentic Commerce — Chat</h1>
-        <div className="connection-status">{connected ? "connected" : "disconnected"}</div>
+      <header className="topbar">
+        <nav className="pill-nav" aria-label="Primary">
+          <button type="button" className="pill-nav-item active">
+            Shop
+          </button>
+          <a className="pill-nav-item" href="/merchant">
+            Merchant
+          </a>
+        </nav>
+        <a className="site-title" href="/">
+          Shopfront
+        </a>
+      </header>
 
-        <div className="chat-log">
-          {messages.map((m) => (
-            <div key={m.id} className={`chat-bubble ${m.role}`}>
-              {m.text}
-            </div>
-          ))}
-        </div>
+      <section className="hero">
+        <h1 className="hero-headline">Gear up for your next run.</h1>
 
-        {searchResults.length > 0 && (
-          <div className="product-grid">
-            {searchResults.map((p) => (
-              <ProductCard key={p.id} product={p} />
+        <div className="hero-glow-zone">
+          <div className="category-toggle" role="tablist" aria-label="Shopping for">
+            {GENDER_TOGGLES.map((toggle) => (
+              <button
+                key={toggle.key}
+                type="button"
+                role="tab"
+                aria-selected={activeGender === toggle.key}
+                className={`category-pill ${activeGender === toggle.key ? "active" : ""}`}
+                onClick={() => selectGender(toggle)}
+              >
+                {toggle.label}
+              </button>
             ))}
           </div>
-        )}
 
-        {recommendation && (
-          <div className="recommendation">
-            <strong>Also consider: {recommendation.name}</strong>
-            <div className="recommendation-reason">{recommendation.reason}</div>
-          </div>
-        )}
-
-        {awaitingConfirm && (
-          <div className="confirm-box">
-            <div>Confirm purchase — ₹{awaitingConfirm.amount}</div>
-            <button onClick={() => sendConfirm("confirm")}>Confirm purchase</button>
-            <button className="secondary" onClick={() => sendConfirm("reject")}>
-              Cancel
+          <div className="hero-chatbox">
+            <input
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && submitQuery(input)}
+              aria-label="Ask the catalog"
+            />
+            {!input && <TypewriterPlaceholder queries={SUGGESTION_CHIPS} />}
+            <button type="button" className="chatbox-send" onClick={() => submitQuery(input)} aria-label="Send">
+              <SendIcon />
             </button>
           </div>
-        )}
-
-        <div className="input-row">
-          <input
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && sendMessage()}
-            placeholder="e.g. Buy the DryTech Running Tee"
-            disabled={busy}
-          />
-          <button onClick={sendMessage} disabled={busy}>
-            Send
-          </button>
         </div>
-      </div>
 
-      <AuditPanel entries={auditEntries} />
+        <div className="chip-row">
+          {SUGGESTION_CHIPS.map((chip) => (
+            <button key={chip} type="button" className="suggestion-chip" onClick={() => goToResults(chip)}>
+              {chip}
+            </button>
+          ))}
+        </div>
+      </section>
     </div>
   );
 }

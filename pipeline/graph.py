@@ -49,18 +49,14 @@ from langgraph.types import Command, interrupt
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
 
-from catalog.retrieval import search_products
+from catalog.retrieval import get_product_detail, search_products
 from db.agents import get_agent
-from db.approvals import (
-    create_approval_request,
-    get_pending_approval_request,
-    resolve_approval_request,
-)
+from db.approvals import create_approval_request, resolve_approval_request
 from db.audit import log_audit_entry
 from db.budget import check_and_reserve_budget, release_budget
 from db.connection import get_database_url
-from db.orders import create_order, set_razorpay_ids, update_order_status
-from db.policy import get_merchant_policy
+from db.orders import create_order, set_razorpay_ids, set_thread_id, update_order_status
+from db.policy import get_merchant_policy_for_order
 from payments.razorpay_gateway import create_razorpay_order, parse_payment_webhook
 
 GROQ_MODEL = "openai/gpt-oss-120b"
@@ -87,6 +83,15 @@ class PipelineState(TypedDict, total=False):
     quantity: int  # optional input, defaults to 1 (see _intent_impl); added for
     # Front Door 2's checkout(product_id, quantity) MCP tool — Front Door 1
     # never sets this, so it's always 1 there, unaffected.
+    product_id: Optional[int]  # optional input: when set, intent/retrieve skip
+    # Groq classification and search_products entirely and resolve straight
+    # to this product (see _intent_impl/_retrieve_impl).
+    cart_items: Optional[list[dict]]  # optional input: a list of
+    # {"product_id": int, "quantity": int} — when set, intent/retrieve
+    # resolve ALL of them into ONE combined order (one amount, one
+    # policy_check/authorization/razorpay/verification run for the whole
+    # cart) instead of product_id's single-item order. Used by Front Door
+    # 1's cart checkout, which bills the cart as a single payment.
 
     # --- resolved in intent ---
     agent_type: str  # "human_session" | "ai_agent"
@@ -240,10 +245,48 @@ implied."""
 
 
 def _intent_impl(state: PipelineState):
-    user_message = state["user_message"]
     agent_id = state["agent_id"]
-
     agent = get_agent(agent_id)
+
+    # Known-product checkout (single item, or a whole cart — Front Door
+    # 1's cart checkout): the product(s) are already known, so there's
+    # nothing to classify — skip the Groq call and search_query/filters
+    # entirely. _retrieve_impl below branches on the same
+    # state.get("cart_items")/state.get("product_id") to skip
+    # search_products too.
+    cart_items = state.get("cart_items")
+    product_id = state.get("product_id")
+    if cart_items or product_id is not None:
+        update = {
+            "agent_type": agent["type"],
+            "intent_type": "checkout",
+            "search_query": "",
+            "filters": {},
+            "payment_method": state.get("payment_method", "card"),
+            "discount_pct": state.get("discount_pct", 0.0),
+            "quantity": state.get("quantity", 1),
+        }
+        if cart_items:
+            input_summary = f"cart_items={cart_items} agent_id={agent_id} (direct combined cart checkout, no text input)"
+            output_summary = (
+                f"intent_type=checkout — resolved directly from cart ({len(cart_items)} product(s)), no search"
+            )
+            reasoning_text = (
+                f"{len(cart_items)} cart item(s) supplied directly for a combined checkout, so intent "
+                f"classification was skipped entirely — no Groq call, no text search; "
+                f"agent #{agent_id} resolved to type={agent['type']}."
+            )
+        else:
+            input_summary = f"product_id={product_id} agent_id={agent_id} (direct cart checkout, no text input)"
+            output_summary = f"intent_type=checkout — resolved directly from cart (product_id={product_id}), no search"
+            reasoning_text = (
+                f"product_id={product_id} was supplied directly (cart checkout), so intent "
+                f"classification was skipped entirely — no Groq call, no text search; "
+                f"agent #{agent_id} resolved to type={agent['type']}."
+            )
+        return update, input_summary, output_summary, reasoning_text
+
+    user_message = state["user_message"]
 
     client = _get_groq_client()
     response = client.chat.completions.create(
@@ -290,7 +333,177 @@ intent_node = audited("intent")(_intent_impl)
 # ---------------------------------------------------------------------------
 
 
+def _retrieve_by_product_id(state: PipelineState, product_id: int):
+    """
+    Known-product checkout path: resolves straight to `product_id` via
+    catalog.retrieval.get_product_detail (the same by-id lookup already
+    used elsewhere, e.g. server/app.py's GET /api/products/{id}) instead of
+    running search_products. No `search_results` key is set on a match, so
+    the frontend has nothing to render a product grid from — the whole
+    point is skipping the "re-shown search results" flash for a product
+    the caller (the cart) already resolved.
+    """
+    detail = get_product_detail(product_id)
+    if detail is None:
+        update: dict[str, Any] = {"search_results": []}
+        input_summary = f"product_id={product_id}"
+        output_summary = f"no product found for product_id={product_id}"
+        reasoning_text = "Cart checkout named a product_id that no longer exists in the catalog."
+        return update, input_summary, output_summary, reasoning_text
+
+    original_price = Decimal(str(detail["price"]))
+    quantity = int(state.get("quantity") or 1)
+    subtotal = original_price * quantity
+    discount_pct = Decimal(str(state.get("discount_pct", 0) or 0))
+    discount_applied = (subtotal * discount_pct / Decimal("100")).quantize(Decimal("0.01"))
+    final_amount = subtotal - discount_applied
+
+    items = [
+        {
+            "product_id": detail["id"],
+            "name": detail["name"],
+            "quantity": quantity,
+            "unit_price": float(original_price),
+        }
+    ]
+    order_id = create_order(
+        agent_id=state["agent_id"],
+        merchant_id=detail["merchant_id"],
+        items=items,
+        amount=final_amount,
+        discount_applied=discount_applied,
+    )
+
+    update = {
+        # Explicitly cleared (not just omitted): this thread_id's Postgres
+        # checkpoint may still hold a stale search_results list from an
+        # earlier browsing/search turn on the same connection — LangGraph
+        # merges partial node updates into the persisted checkpoint, so a
+        # key this update doesn't mention keeps its old value instead of
+        # disappearing. Setting it to None here is what makes
+        # server/app.py's `if result.get("search_results") is not None`
+        # check correctly skip re-sending (and re-rendering) a product grid.
+        "search_results": None,
+        "order_id": order_id,
+        "target_product": {"id": detail["id"], "name": detail["name"], "price": float(original_price)},
+        "amount": float(final_amount),
+        "discount_applied": float(discount_applied),
+    }
+    input_summary = f"product_id={product_id} qty={quantity} (direct, no search)"
+    output_summary = (
+        f"created order_id={order_id} for product #{detail['id']} {detail['name']!r} "
+        f"qty={quantity} amount={final_amount}"
+    )
+    reasoning_text = (
+        "Cart checkout resolved directly by product_id (catalog.retrieval.get_product_detail), "
+        "no search_products call; order row created here so subsequent steps have an order_id to log against."
+    )
+    return update, input_summary, output_summary, reasoning_text
+
+
+def _retrieve_by_cart_items(state: PipelineState, cart_items: list[dict]):
+    """
+    Combined-cart checkout path: every item in the cart resolved into ONE
+    order (one combined amount, one items[] list on that order row) so
+    policy_check/authorization/razorpay/verification each run once for the
+    whole cart instead of once per item — the shopper explicitly chose
+    "bill everything together" over per-item isolation (see Results.jsx's
+    proceedToPayment). Each line is resolved the same way
+    _retrieve_by_product_id resolves a single one (catalog.retrieval.
+    get_product_detail, no search_products); db.orders.create_order
+    already accepts a multi-line items[] list, it's just never been given
+    more than one line before this.
+    """
+    resolved = []
+    for entry in cart_items:
+        detail = get_product_detail(entry.get("product_id"))
+        if detail is None:
+            continue
+        resolved.append((detail, int(entry.get("quantity") or 1)))
+
+    if not resolved:
+        update: dict[str, Any] = {"search_results": []}
+        input_summary = f"cart_items={cart_items}"
+        output_summary = "no valid products found among cart_items"
+        reasoning_text = "Cart checkout named product_ids that no longer exist in the catalog."
+        return update, input_summary, output_summary, reasoning_text
+
+    # Phase 1 multi-tenant: an order belongs to exactly one merchant (its
+    # policy_check/authorization resolve one merchant_policy row for the
+    # whole order — see db.policy.get_merchant_policy_for_order). A cart
+    # mixing products from different merchants has no single merchant to
+    # bill against, so it's rejected here rather than silently applying
+    # one merchant's policy to another merchant's items. Splitting a mixed
+    # cart into one order per merchant is a real feature, not attempted in
+    # this phase.
+    merchant_ids = {detail["merchant_id"] for detail, _ in resolved}
+    if len(merchant_ids) > 1:
+        update = {"search_results": []}
+        input_summary = f"cart_items={cart_items}"
+        output_summary = f"rejected: cart spans {len(merchant_ids)} different merchants ({sorted(merchant_ids)})"
+        reasoning_text = (
+            "Combined cart checkout requires every item to belong to the same merchant "
+            "(one order, one policy_check/authorization run) — this cart mixed products "
+            "from different merchants, which isn't supported yet."
+        )
+        return update, input_summary, output_summary, reasoning_text
+    merchant_id = merchant_ids.pop()
+
+    subtotal = sum((Decimal(str(detail["price"])) * quantity for detail, quantity in resolved), Decimal("0"))
+    discount_pct = Decimal(str(state.get("discount_pct", 0) or 0))
+    discount_applied = (subtotal * discount_pct / Decimal("100")).quantize(Decimal("0.01"))
+    final_amount = subtotal - discount_applied
+
+    items = [
+        {
+            "product_id": detail["id"],
+            "name": detail["name"],
+            "quantity": quantity,
+            "unit_price": float(detail["price"]),
+        }
+        for detail, quantity in resolved
+    ]
+    order_id = create_order(
+        agent_id=state["agent_id"],
+        merchant_id=merchant_id,
+        items=items,
+        amount=final_amount,
+        discount_applied=discount_applied,
+    )
+
+    # target_product only feeds recommend_node's single-product cross-sell
+    # lookup (nothing downstream of that reads it) — the first resolved
+    # line stands in for the whole cart there, since a multi-item order
+    # has no single "the" product to cross-sell against.
+    first_detail = resolved[0][0]
+    update = {
+        "search_results": None,
+        "order_id": order_id,
+        "target_product": {"id": first_detail["id"], "name": first_detail["name"], "price": float(first_detail["price"])},
+        "amount": float(final_amount),
+        "discount_applied": float(discount_applied),
+    }
+    names = ", ".join(f"{d['name']!r} x{q}" for d, q in resolved)
+    input_summary = f"cart_items={cart_items} ({len(resolved)} product(s), direct, no search)"
+    output_summary = f"created order_id={order_id} covering {len(resolved)} product(s): {names}; amount={final_amount}"
+    reasoning_text = (
+        "Combined cart checkout: every cart line resolved directly by product_id "
+        "(catalog.retrieval.get_product_detail), no search_products call; one order "
+        "row covers all items so policy_check/authorization/razorpay/verification "
+        "run once for the whole cart, not once per item."
+    )
+    return update, input_summary, output_summary, reasoning_text
+
+
 def _retrieve_impl(state: PipelineState):
+    cart_items = state.get("cart_items")
+    if cart_items:
+        return _retrieve_by_cart_items(state, cart_items)
+
+    product_id = state.get("product_id")
+    if product_id is not None:
+        return _retrieve_by_product_id(state, product_id)
+
     query = state["search_query"]
     raw_filters = state.get("filters") or {}
 
@@ -313,6 +526,8 @@ def _retrieve_impl(state: PipelineState):
             "price": float(p.price),
             "stock": p.stock,
             "score": p.score,
+            "image_url": p.image_url,
+            "merchant_name": p.merchant_name,
         }
         for p in results
     ]
@@ -337,6 +552,7 @@ def _retrieve_impl(state: PipelineState):
         ]
         order_id = create_order(
             agent_id=state["agent_id"],
+            merchant_id=top.merchant_id,
             items=items,
             amount=final_amount,
             discount_applied=discount_applied,
@@ -460,7 +676,11 @@ def _policy_check_impl(state: PipelineState):
     payment_method = state.get("payment_method") or "card"
     original_price = Decimal(str(state["target_product"]["price"]))
 
-    policy = get_merchant_policy()
+    # Phase 1 multi-tenant: policy is resolved per-order via the merchant
+    # that owns the product(s) being bought (orders.merchant_id, set at
+    # order-creation time in retrieve — see db.policy.get_merchant_policy_
+    # for_order), not a single global merchant_policy row anymore.
+    policy = get_merchant_policy_for_order(order_id)
     checks = []
 
     discount_pct_actual = (
@@ -545,8 +765,7 @@ def route_after_policy_check(state: PipelineState) -> str:
 # that call. On resume, LangGraph re-executes the node FROM THE TOP (not
 # from the interrupt() call) — everything before interrupt() runs again.
 # Two consequences handled below:
-#   1. Any DB write before interrupt() must be idempotent across re-entry
-#      (see the get_pending_approval_request guard).
+#   1. Any DB write before interrupt() must be idempotent across re-entry.
 #   2. There's no way to log a "paused" audit entry from inside the node on
 #      the pausing call itself (there's no tuple to log). That entry is
 #      written by run_pipeline()/resume_pipeline() below instead, right
@@ -557,7 +776,6 @@ def _authorization_impl(state: PipelineState):
     order_id = state["order_id"]
     agent_type = state["agent_type"]
     amount = Decimal(str(state["amount"]))
-    policy = get_merchant_policy()
 
     if agent_type == "human_session":
         decision = interrupt(
@@ -585,44 +803,51 @@ def _authorization_impl(state: PipelineState):
         )
         return update, input_summary, output_summary, reasoning_text
 
-    # ai_agent
-    threshold = policy["approval_required_above"]
-    if amount <= threshold:
+    # ai_agent: auto-authorized up to the merchant's own approval_required_above
+    # threshold; over that, pause for merchant approval (mirrors the human
+    # confirm branch above — same interrupt()/resume pattern, different
+    # resolution path: mcp_server/server.py's /merchant/resolve-approval,
+    # never an MCP tool — see that module's docstring on the self-approval
+    # boundary).
+    policy = get_merchant_policy_for_order(order_id)
+    approval_required_above = Decimal(str(policy["approval_required_above"]))
+
+    if amount <= approval_required_above:
         update_order_status(order_id, "approved")
         update = {
             "authorized": True,
-            "authorization_reason": f"ai_agent amount {amount} <= approval_required_above {threshold}: auto-authorized",
+            "authorization_reason": (
+                f"ai_agent amount {amount} <= merchant's approval_required_above "
+                f"{approval_required_above}: auto-authorized"
+            ),
         }
-        input_summary = f"order_id={order_id} agent_type=ai_agent amount={amount} threshold={threshold}"
-        output_summary = "authorized=True (auto, no pause)"
+        input_summary = (
+            f"order_id={order_id} agent_type=ai_agent amount={amount} "
+            f"approval_required_above={approval_required_above}"
+        )
+        output_summary = "authorized=True (auto, within merchant's threshold)"
         reasoning_text = (
-            f"ai_agent purchase amount {amount} is within approval_required_above "
-            f"({threshold}); auto-authorized per merchant policy, no human intervention needed."
+            f"ai_agent purchase amount {amount} is within the merchant's "
+            f"approval_required_above threshold ({approval_required_above}); auto-authorized."
         )
         return update, input_summary, output_summary, reasoning_text
 
-    # ai_agent, over threshold: create (idempotently) a pending approval
-    # request, then pause.
-    existing = get_pending_approval_request(order_id)
-    approval_id = existing["id"] if existing else create_approval_request(order_id)
-
+    approval_id = create_approval_request(order_id)
     decision = interrupt(
         {
             "type": "merchant_approval_required",
             "order_id": order_id,
             "approval_request_id": approval_id,
             "amount": float(amount),
-            "threshold": float(threshold),
             "message": (
-                f"Order #{order_id} amount INR {amount} exceeds autonomous threshold "
-                f"INR {threshold}; merchant approval required."
+                f"Order #{order_id}: amount {amount} exceeds merchant's approval threshold "
+                f"({approval_required_above}) — awaiting merchant approval."
             ),
         }
     )
-
-    approved = decision.get("approved") if isinstance(decision, dict) else bool(decision == "approved")
-    resolved_by = decision.get("resolved_by", "unknown") if isinstance(decision, dict) else "unknown"
-    resolve_approval_request(approval_id, "approved" if approved else "rejected", resolved_by)
+    approved = bool(isinstance(decision, dict) and decision.get("approved"))
+    resolved_by = decision.get("resolved_by") if isinstance(decision, dict) else None
+    resolve_approval_request(approval_id, approved, resolved_by)
 
     if approved:
         update_order_status(order_id, "approved")
@@ -632,22 +857,16 @@ def _authorization_impl(state: PipelineState):
         update_order_status(order_id, "failed")
         budget_note = f" Budget of {amount} released back to agent #{state['agent_id']}."
 
-    update = {
-        "authorized": approved,
-        "authorization_reason": (
-            f"merchant {'approved' if approved else 'rejected'} approval_request "
-            f"#{approval_id} (resolved_by={resolved_by})"
-        ),
-    }
+    update = {"authorized": approved, "authorization_reason": f"merchant approval decision: {decision!r}"}
     input_summary = (
-        f"order_id={order_id} agent_type=ai_agent amount={amount} threshold={threshold} "
+        f"order_id={order_id} agent_type=ai_agent amount={amount} "
         f"approval_request_id={approval_id}"
     )
-    output_summary = f"authorized={approved}"
+    output_summary = f"authorized={approved} (resumed with decision={decision!r})"
     reasoning_text = (
-        f"ai_agent amount {amount} exceeds approval_required_above ({threshold}); "
-        f"created/reused approval_request #{approval_id}, paused via interrupt() "
-        "until a merchant resolved it." + budget_note
+        f"ai_agent amount {amount} exceeds merchant's approval_required_above "
+        f"({approval_required_above}); graph paused via interrupt() until the merchant "
+        f"resolved approval_request #{approval_id}." + budget_note
     )
     return update, input_summary, output_summary, reasoning_text
 
@@ -845,6 +1064,11 @@ def run_pipeline(
     try:
         config = {"configurable": {"thread_id": thread_id}}
         result = GRAPH.invoke(initial_state, config=config)
+        if result.get("order_id") is not None:
+            # So a later process (the merchant dashboard's resolve-approval
+            # endpoint) can find this order's checkpoint by order_id alone —
+            # see db.orders.set_thread_id.
+            set_thread_id(result["order_id"], thread_id)
         _log_interrupt_if_any(result, config)
         return result
     finally:

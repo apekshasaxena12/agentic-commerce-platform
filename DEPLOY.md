@@ -47,6 +47,10 @@ dashboard (Environment tab) — **not** committed anywhere:
 - `DATABASE_URL` — the existing Supabase pooler URL from `.env`
 - `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET`, `RAZORPAY_WEBHOOK_SECRET`
 - `GROQ_API_KEY`
+- `MERCHANT_SESSION_SECRET` — signs the merchant dashboard's session JWT
+  (`mcp_server/merchant_auth.py`); required on the `agentic-commerce-mcp`
+  service specifically (that's where `/merchant/login` lives) — without it,
+  every merchant login fails with a 500
 - `ALLOWED_ORIGINS` — the deployed Vercel URL(s), comma-separated (e.g.
   `https://your-app.vercel.app`); both `server/app.py` and
   `mcp_server/server.py` read this (Day 13 addition — defaults to the
@@ -70,8 +74,11 @@ build (Vite inlines `VITE_*` vars at build time, so they must be set
 *before* the deploy, not after):
 
 - `VITE_WS_URL` — `wss://agentic-commerce-backend.onrender.com/ws/chat`
+- `VITE_API_URL` — `https://agentic-commerce-backend.onrender.com` (ProductModal.jsx's
+  `GET /api/products/{id}` calls; defaults to `localhost:8000` if unset, which
+  is why this is easy to miss — the product detail modal would silently try
+  to reach the deployer's own machine instead of the deployed backend)
 - `VITE_MERCHANT_API_BASE` — `https://agentic-commerce-mcp.onrender.com/merchant`
-- `VITE_MERCHANT_WS_URL` — `wss://agentic-commerce-mcp.onrender.com/merchant/ws`
 
 Confirm reachable: open the Vercel URL and `<vercel-url>/merchant` in a
 browser; both should load without a CORS error in devtools (which would
@@ -98,7 +105,7 @@ racing it. There's no reliable way to force which one "wins" without
 disabling the relay; the ask here is to confirm the real webhook actually
 arrives, not that it's the only path.
 
-## Part 5 — smoke test against the deployed system
+## Part 6 — smoke test against the deployed system
 
 Same four scenarios as prior sessions' local testing, run against the
 Vercel URL / Render URLs instead of localhost:

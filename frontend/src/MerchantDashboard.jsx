@@ -1,36 +1,121 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+// Shared topbar (.topbar/.pill-nav/.pill-nav-item/.site-title) — same bar
+// as the shopper page, so both pages read as one product. Imported after
+// MerchantDashboard.css so its topbar rules aren't shadowed by it.
 import "./MerchantDashboard.css";
+import "./App.css";
+import MerchantLogin from "./MerchantLogin";
 
 // Day 13: points at the deployed Front Door 2 Render service (mcp_server's
-// --http mode, see Dockerfile) via Vite env vars (VITE_MERCHANT_API_BASE/
-// VITE_MERCHANT_WS_URL, set in Vercel's project settings); falls back to
-// localhost so nothing changes for local dev.
+// --http mode, see Dockerfile) via a Vite env var (VITE_MERCHANT_API_BASE,
+// set in Vercel's project settings); falls back to localhost so nothing
+// changes for local dev.
 const API_BASE = import.meta.env.VITE_MERCHANT_API_BASE || "http://localhost:8765/merchant";
-const WS_URL = import.meta.env.VITE_MERCHANT_WS_URL || "ws://localhost:8765/merchant/ws";
 
 function formatMoney(n) {
   return `₹${Number(n).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
-function productLabel(items) {
-  if (!items || items.length === 0) return "—";
-  const first = items[0];
-  return items.length > 1
-    ? `${first.name} +${items.length - 1} more`
-    : `${first.name} (x${first.quantity})`;
+function StockManage() {
+  const [products, setProducts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [adjusting, setAdjusting] = useState(null);
+
+  useEffect(() => {
+    fetch(`${API_BASE}/products`, { credentials: "include" })
+      .then((r) => r.json())
+      .then(setProducts)
+      .catch(() => setError("Could not reach the merchant API — is mcp_server.server --http running on :8765?"))
+      .finally(() => setLoading(false));
+  }, []);
+
+  async function adjust(product_id, delta) {
+    setAdjusting(product_id);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/products/${product_id}/stock`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ delta }),
+      });
+      if (!res.ok) throw new Error();
+      const updated = await res.json();
+      setProducts((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+    } catch {
+      setError(`Product #${product_id}: stock update failed`);
+    } finally {
+      setAdjusting(null);
+    }
+  }
+
+  return (
+    <section className="panel">
+      <div className="panel-header">
+        <h2>Stock</h2>
+      </div>
+      {error && <div className="banner-error">{error}</div>}
+      {loading && <p className="muted">Loading…</p>}
+      {!loading && products.length === 0 && <p className="muted">No products in your catalog.</p>}
+      {products.length > 0 && (
+        <table className="data-table">
+          <thead>
+            <tr>
+              <th>Product</th>
+              <th>Category</th>
+              <th>Price</th>
+              <th>Stock</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {products.map((p) => (
+              <tr key={p.id}>
+                <td>{p.name}</td>
+                <td className="muted">{p.category.replace(/_/g, " ")}</td>
+                <td className="amount">{formatMoney(p.price)}</td>
+                <td className="amount">{p.stock}</td>
+                <td className="actions">
+                  <button
+                    className="stock-btn"
+                    disabled={adjusting === p.id || p.stock === 0}
+                    onClick={() => adjust(p.id, -1)}
+                    aria-label={`Decrease stock for ${p.name}`}
+                  >
+                    −
+                  </button>
+                  <button
+                    className="stock-btn"
+                    disabled={adjusting === p.id}
+                    onClick={() => adjust(p.id, 1)}
+                    aria-label={`Increase stock for ${p.name}`}
+                  >
+                    +
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  );
 }
 
-function PendingApprovals({ connected, liveEvent }) {
+function PendingApprovals() {
   const [approvals, setApprovals] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [actioning, setActioning] = useState(null);
   const [error, setError] = useState(null);
+  const [resolving, setResolving] = useState(null);
 
   async function refresh() {
+    setLoading(true);
+    setError(null);
     try {
-      const res = await fetch(`${API_BASE}/pending-approvals`);
-      const data = await res.json();
-      setApprovals(data);
+      const res = await fetch(`${API_BASE}/pending-approvals`, { credentials: "include" });
+      if (!res.ok) throw new Error();
+      setApprovals(await res.json());
     } catch {
       setError("Could not reach the merchant API — is mcp_server.server --http running on :8765?");
     } finally {
@@ -40,36 +125,26 @@ function PendingApprovals({ connected, liveEvent }) {
 
   useEffect(() => {
     refresh();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Re-fetch the snapshot whenever the shared dashboard socket reports a new
-  // or resolved approval — see MerchantDashboard's single WebSocket below.
-  useEffect(() => {
-    if (liveEvent && (liveEvent.type === "pending_approval_created" || liveEvent.type === "approval_resolved")) {
-      refresh();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [liveEvent]);
-
-  async function resolve(order_id, approved) {
-    setActioning(order_id);
+  async function resolve(approvalId, approved) {
+    setResolving(approvalId);
     setError(null);
     try {
-      const res = await fetch(`${API_BASE}/resolve-approval`, {
+      const res = await fetch(`${API_BASE}/resolve-approval/${approvalId}`, {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ order_id, approved, resolved_by: "merchant_dashboard" }),
+        body: JSON.stringify({ approved }),
       });
-      const result = await res.json();
-      if (result.outcome === "error") {
-        setError(`Order #${order_id}: ${result.reason}`);
-      }
-      await refresh();
+      if (!res.ok) throw new Error();
+      // The order is now resolved (completed or failed) — it drops off this
+      // pending list rather than needing its row updated in place.
+      setApprovals((prev) => prev.filter((a) => a.id !== approvalId));
     } catch {
-      setError(`Order #${order_id}: request failed`);
+      setError(`Approval #${approvalId}: ${approved ? "approve" : "reject"} failed`);
     } finally {
-      setActioning(null);
+      setResolving(null);
     }
   }
 
@@ -77,49 +152,47 @@ function PendingApprovals({ connected, liveEvent }) {
     <section className="panel">
       <div className="panel-header">
         <h2>Pending approvals</h2>
-        <span className={`live-dot ${connected ? "live" : "down"}`}>
-          {connected ? "live" : "disconnected"}
-        </span>
+        <button className="refresh" onClick={refresh}>
+          Refresh
+        </button>
       </div>
       {error && <div className="banner-error">{error}</div>}
       {loading && <p className="muted">Loading…</p>}
       {!loading && approvals.length === 0 && (
-        <p className="muted">No orders currently awaiting approval.</p>
+        <p className="muted">No AI agent purchases are awaiting your approval right now.</p>
       )}
       {approvals.length > 0 && (
         <table className="data-table">
           <thead>
             <tr>
               <th>Order</th>
-              <th>Requested by</th>
-              <th>Product</th>
+              <th>Agent</th>
               <th>Amount</th>
-              <th>Threshold</th>
+              <th>Requested</th>
               <th></th>
             </tr>
           </thead>
           <tbody>
             {approvals.map((a) => (
-              <tr key={a.approval_request_id}>
+              <tr key={a.id}>
                 <td>#{a.order_id}</td>
                 <td>
                   <span className={`agent-badge ${a.agent_type}`}>{a.agent_name}</span>
                 </td>
-                <td>{productLabel(a.items)}</td>
-                <td className="amount over">{formatMoney(a.amount)}</td>
-                <td className="muted">{formatMoney(a.threshold)}</td>
+                <td className="amount">{formatMoney(a.amount)}</td>
+                <td className="muted small">{new Date(a.requested_at).toLocaleString()}</td>
                 <td className="actions">
                   <button
-                    className="approve"
-                    disabled={actioning === a.order_id}
-                    onClick={() => resolve(a.order_id, true)}
+                    className="approve-btn"
+                    disabled={resolving === a.id}
+                    onClick={() => resolve(a.id, true)}
                   >
                     Approve
                   </button>
                   <button
-                    className="reject"
-                    disabled={actioning === a.order_id}
-                    onClick={() => resolve(a.order_id, false)}
+                    className="reject-btn"
+                    disabled={resolving === a.id}
+                    onClick={() => resolve(a.id, false)}
                   >
                     Reject
                   </button>
@@ -137,7 +210,7 @@ function AgentOverview() {
   const [agents, setAgents] = useState([]);
 
   useEffect(() => {
-    fetch(`${API_BASE}/agents`)
+    fetch(`${API_BASE}/agents`, { credentials: "include" })
       .then((r) => r.json())
       .then(setAgents)
       .catch(() => {});
@@ -148,6 +221,10 @@ function AgentOverview() {
       <div className="panel-header">
         <h2>Agents</h2>
       </div>
+      <p className="muted small">
+        Platform-wide — every buyer agent, not scoped to your store. Shown here since agents aren't
+        merchant-specific (the same agent can shop at any store); their orders on the tabs above are.
+      </p>
       <div className="agent-cards">
         {agents.map((a) => {
           const pct = a.budget_limit > 0 ? Math.min(100, (a.spent_so_far / a.budget_limit) * 100) : 0;
@@ -158,7 +235,7 @@ function AgentOverview() {
                 <span className="agent-name">{a.name}</span>
               </div>
               <div className="budget-bar">
-                <div className="budget-fill" style={{ width: `${pct}%` }} />
+                <div className={`budget-fill ${a.type}`} style={{ width: `${pct}%` }} />
               </div>
               <div className="budget-numbers">
                 <span>{formatMoney(a.spent_so_far)} spent</span>
@@ -193,7 +270,7 @@ function AuditTrail() {
   async function refresh() {
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/audit-trail`);
+      const res = await fetch(`${API_BASE}/audit-trail`, { credentials: "include" });
       setRows(await res.json());
     } finally {
       setLoading(false);
@@ -241,7 +318,7 @@ function AuditTrail() {
   return (
     <section className="panel">
       <div className="panel-header">
-        <h2>Full audit trail — all orders</h2>
+        <h2>Full audit trail — your orders</h2>
         <button className="refresh" onClick={refresh}>
           Refresh
         </button>
@@ -334,33 +411,55 @@ function AuditTrail() {
 }
 
 export default function MerchantDashboard() {
-  const [tab, setTab] = useState("approvals");
-  const [wsConnected, setWsConnected] = useState(false);
-  const [liveEvent, setLiveEvent] = useState(null);
-  const wsRef = useRef(null);
+  const [tab, setTab] = useState("stock");
+
+  // null = still checking the session, false = not logged in, object = the
+  // logged-in merchant ({id, name, email}) from GET /me or POST /login.
+  const [merchant, setMerchant] = useState(null);
 
   useEffect(() => {
-    const ws = new WebSocket(WS_URL);
-    wsRef.current = ws;
-    ws.onopen = () => setWsConnected(true);
-    ws.onclose = () => setWsConnected(false);
-    ws.onmessage = (event) => setLiveEvent(JSON.parse(event.data));
-    return () => ws.close();
+    fetch(`${API_BASE}/me`, { credentials: "include" })
+      .then((res) => (res.ok ? res.json() : Promise.reject()))
+      .then(setMerchant)
+      .catch(() => setMerchant(false));
   }, []);
+
+  async function handleLogout() {
+    await fetch(`${API_BASE}/logout`, { method: "POST", credentials: "include" });
+    setMerchant(false);
+  }
+
+  if (merchant === null) {
+    return null; // brief session check, avoids a login-form flash for an already-logged-in merchant
+  }
+
+  if (!merchant) {
+    return <MerchantLogin onLoggedIn={setMerchant} />;
+  }
 
   return (
     <div className="merchant-app">
-      <header className="merchant-topbar">
-        <div className="merchant-topbar-left">
-          <span className="merchant-logo">MERCHANT CONSOLE</span>
-          <span className="merchant-subtitle">Agentic Commerce — bounded, explainable, gated</span>
-        </div>
-        <a className="back-link" href="/">
-          ← shopper view
+      <header className="topbar">
+        <nav className="pill-nav" aria-label="Primary">
+          <a className="pill-nav-item" href="/">
+            Shop
+          </a>
+          <button type="button" className="pill-nav-item active">
+            Merchant
+          </button>
+        </nav>
+        <a className="site-title" href="/">
+          Shopfront
         </a>
+        <button type="button" className="logout-btn" onClick={handleLogout}>
+          Log out — {merchant.name}
+        </button>
       </header>
 
       <nav className="merchant-tabs">
+        <button className={tab === "stock" ? "active" : ""} onClick={() => setTab("stock")}>
+          Stock
+        </button>
         <button className={tab === "approvals" ? "active" : ""} onClick={() => setTab("approvals")}>
           Pending approvals
         </button>
@@ -373,7 +472,8 @@ export default function MerchantDashboard() {
       </nav>
 
       <main className="merchant-content">
-        {tab === "approvals" && <PendingApprovals connected={wsConnected} liveEvent={liveEvent} />}
+        {tab === "stock" && <StockManage />}
+        {tab === "approvals" && <PendingApprovals />}
         {tab === "audit" && <AuditTrail />}
         {tab === "agents" && <AgentOverview />}
       </main>

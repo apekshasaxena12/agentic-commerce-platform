@@ -23,6 +23,7 @@ CREATE TABLE product (
     -- 1536 dims to match OpenAI text-embedding-3-small; not populated yet.
     embedding VECTOR(1536),
     return_policy TEXT,
+    image_url TEXT,
     substitute_ids INTEGER[] NOT NULL DEFAULT '{}',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

@@ -20,7 +20,7 @@ from db.connection import get_database_url
 
 # ---------------------------------------------------------------------------
 # Products: id, name, category, price (INR), stock, structured_attributes,
-# semantic_description, return_policy, substitute_ids
+# semantic_description, return_policy, substitute_ids, image_url
 # ---------------------------------------------------------------------------
 
 PRODUCTS = [
@@ -33,7 +33,8 @@ PRODUCTS = [
      "cushioning, breathable mesh upper, and a wide size range. Good for "
      "beginners logging their first 5Ks up to daily training miles.",
      "30-day return if unworn, original box and tags required.",
-     [3, 4, 7]),
+     [3, 4, 7],
+     "/products/1.jpg"),
 
     (2, "Trailblaze GTX", "running_shoes", 5999, 25,
      {"brand": "Nimbus Sports", "gender": "unisex", "use_case": "trail running",
@@ -43,7 +44,8 @@ PRODUCTS = [
      "and loose gravel, reinforced toe cap, and a GORE-TEX-style membrane "
      "for wet-weather trail runs.",
      "30-day return if unworn, original box and tags required.",
-     [6]),
+     [6],
+     "/products/2.jpg"),
 
     (3, "CloudStep Pro", "running_shoes", 6499, 30,
      {"brand": "Zephyr Athletics", "gender": "men", "use_case": "road running",
@@ -53,7 +55,8 @@ PRODUCTS = [
      "to reduce joint impact on long runs. Popular with runners training "
      "for half and full marathons.",
      "30-day return if unworn, original box and tags required.",
-     [1, 4, 5]),
+     [1, 4, 5],
+     "/products/3.jpg"),
 
     (4, "CloudStep Lite", "running_shoes", 3999, 45,
      {"brand": "Zephyr Athletics", "gender": "women", "use_case": "road running",
@@ -62,7 +65,8 @@ PRODUCTS = [
      "A lighter, lower-cost version of the CloudStep line aimed at everyday "
      "5-10K road runs, with a snug knit upper and moderate cushioning.",
      "30-day return if unworn, original box and tags required.",
-     [1, 3, 7]),
+     [1, 3, 7],
+     "/products/4.jpg"),
 
     (5, "Marathon Elite Carbon", "running_shoes", 8999, 15,
      {"brand": "Apex Run", "gender": "unisex", "use_case": "race day",
@@ -72,7 +76,8 @@ PRODUCTS = [
      "propulsive rocker and minimal weight. Not intended as a daily trainer "
      "due to reduced durability of the racing foam.",
      "15-day return if unworn (racing shoes only), original box required.",
-     [3]),
+     [3],
+     "/products/5.jpg"),
 
     (6, "EasyStride Cushion", "running_shoes", 2999, 60,
      {"brand": "Apex Run", "gender": "unisex", "use_case": "walking/jogging",
@@ -81,7 +86,8 @@ PRODUCTS = [
      "Budget-friendly cushioned shoe for walking and light jogging, wide "
      "toe box, machine washable. Entry-level option for casual runners.",
      "30-day return if unworn, original box and tags required.",
-     [2, 8]),
+     [2, 8],
+     "/products/6.jpg"),
 
     (7, "UrbanPace Knit", "running_shoes", 3499, 35,
      {"brand": "Stridewell", "gender": "unisex", "use_case": "road running",
@@ -90,7 +96,8 @@ PRODUCTS = [
      "Sock-fit knit upper running shoe for short-to-mid distance road runs, "
      "with a versatile look that doubles as a casual sneaker.",
      "30-day return if unworn, original box and tags required.",
-     [1, 4]),
+     [1, 4],
+     "/products/7.jpg"),
 
     (8, "SprintForce X", "running_shoes", 4499, 28,
      {"brand": "Stridewell", "gender": "unisex", "use_case": "interval training",
@@ -99,63 +106,71 @@ PRODUCTS = [
      "Responsive low-profile trainer built for speed work, tempo runs, and "
      "track intervals, with a firmer foam for better ground feedback.",
      "30-day return if unworn, original box and tags required.",
-     [6]),
+     [6],
+     "/products/8.jpg"),
 
     # --- Socks (9-12) ---
     (9, "Compression Run Socks 3-Pack", "socks", 499, 100,
-     {"brand": "FlexFit", "material": "nylon-spandex blend", "pack_size": 3,
+     {"brand": "FlexFit", "gender": "unisex", "material": "nylon-spandex blend", "pack_size": 3,
       "sizes": ["S/M", "L/XL"], "compression": "graduated"},
      "Graduated compression running socks sold in packs of 3, designed to "
      "reduce calf fatigue and improve circulation on longer runs.",
      "7-day exchange only for unopened packs (hygiene item).",
-     [10, 11, 12]),
+     [10, 11, 12],
+     "/products/9.jpg"),
 
     (10, "Merino Wool Trail Socks", "socks", 599, 70,
-     {"brand": "FlexFit", "material": "merino wool blend", "pack_size": 1,
+     {"brand": "FlexFit", "gender": "unisex", "material": "merino wool blend", "pack_size": 1,
       "sizes": ["S/M", "L/XL"], "use_case": "trail running"},
      "Cushioned merino wool trail running socks with reinforced heel and "
      "toe, naturally odor-resistant and warm for cooler trail runs.",
      "7-day exchange only for unopened packs (hygiene item).",
-     [9]),
+     [9],
+     "/products/10.jpg"),
 
     (11, "No-Show Cushion Socks 5-Pack", "socks", 399, 120,
-     {"brand": "Nimbus Sports", "material": "cotton-poly blend", "pack_size": 5,
+     {"brand": "Nimbus Sports", "gender": "unisex", "material": "cotton-poly blend", "pack_size": 5,
       "sizes": ["S/M", "L/XL"], "style": "no-show"},
      "Everyday no-show running socks in a 5-pack, cushioned sole, "
      "silicone heel grip to prevent slipping inside the shoe.",
      "7-day exchange only for unopened packs (hygiene item).",
-     [9, 12]),
+     [9, 12],
+     "/products/11.jpg"),
 
     (12, "Anti-Blister Coolmax Socks", "socks", 449, 80,
-     {"brand": "Zephyr Athletics", "material": "Coolmax polyester", "pack_size": 2,
+     {"brand": "Zephyr Athletics", "gender": "unisex", "material": "Coolmax polyester", "pack_size": 2,
       "sizes": ["S/M", "L/XL"], "feature": "double-layer anti-blister"},
      "Double-layer anti-blister running socks that reduce friction on long "
      "runs, moisture-wicking Coolmax fabric keeps feet dry.",
      "7-day exchange only for unopened packs (hygiene item).",
-     [9, 11]),
+     [9, 11],
+     "/products/12.jpg"),
 
     # --- Insoles (13-15) ---
     (13, "Orthotic Comfort Insoles", "insoles", 799, 50,
-     {"brand": "SoleCare", "arch_support": "high", "sizes_uk": ["S", "M", "L", "XL"]},
+     {"brand": "SoleCare", "gender": "unisex", "arch_support": "high", "sizes_uk": ["S", "M", "L", "XL"]},
      "Firm orthotic insoles with deep heel cup and high arch support, "
      "recommended for runners with flat feet or plantar fasciitis history.",
      "30-day return if unused, original packaging required.",
-     [14, 15]),
+     [14, 15],
+     "/products/13.jpg"),
 
     (14, "Gel Cushion Insoles", "insoles", 599, 65,
-     {"brand": "SoleCare", "arch_support": "medium", "sizes_uk": ["S", "M", "L", "XL"]},
+     {"brand": "SoleCare", "gender": "unisex", "arch_support": "medium", "sizes_uk": ["S", "M", "L", "XL"]},
      "Gel-cushioned everyday insoles for extra shock absorption, "
      "trimmable to fit, works well in both running shoes and sneakers.",
      "30-day return if unused, original packaging required.",
-     [13],),
+     [13],
+     "/products/14.jpg"),
 
     (15, "Arch Support Trail Insoles", "insoles", 899, 40,
-     {"brand": "SoleCare", "arch_support": "high", "sizes_uk": ["S", "M", "L", "XL"],
+     {"brand": "SoleCare", "gender": "unisex", "arch_support": "high", "sizes_uk": ["S", "M", "L", "XL"],
       "use_case": "trail running"},
      "Rugged arch-support insoles built for trail shoes, with a stiffer "
      "shank for stability on uneven terrain.",
      "30-day return if unused, original packaging required.",
-     [13, 14]),
+     [13, 14],
+     "/products/15.jpg"),
 
     # --- Apparel tops (16-18) ---
     (16, "DryTech Running Tee", "apparel_top", 899, 90,
@@ -164,7 +179,8 @@ PRODUCTS = [
      "Moisture-wicking short-sleeve running tee with mesh side panels for "
      "ventilation, flatlock seams to prevent chafing.",
      "30-day return if unworn with tags attached.",
-     [18]),
+     [18],
+     "/products/16.jpg"),
 
     (17, "Long Sleeve Thermal Run Top", "apparel_top", 1499, 55,
      {"brand": "Apex Run", "gender": "unisex", "material": "brushed thermal poly",
@@ -172,7 +188,8 @@ PRODUCTS = [
      "Brushed-interior thermal long sleeve top for cold-weather runs, "
      "thumbholes and a half-zip collar for temperature control.",
      "30-day return if unworn with tags attached.",
-     [22]),
+     [22],
+     "/products/17.jpg"),
 
     (18, "Compression Base Layer Top", "apparel_top", 1299, 45,
      {"brand": "FlexFit", "gender": "unisex", "material": "nylon-spandex compression",
@@ -180,7 +197,8 @@ PRODUCTS = [
      "Snug compression base layer top for muscle support during runs or as "
      "a layering piece underneath a jacket in cold weather.",
      "30-day return if unworn with tags attached.",
-     [16]),
+     [16],
+     "/products/18.jpg"),
 
     # --- Apparel bottoms (19-21) ---
     (19, "5-inch Running Shorts", "apparel_bottom", 999, 75,
@@ -189,7 +207,8 @@ PRODUCTS = [
      "Lightweight 5-inch running shorts with a built-in brief liner and a "
      "zippered pocket for keys or a gel pack.",
      "30-day return if unworn with tags attached.",
-     [21]),
+     [21],
+     "/products/19.jpg"),
 
     (20, "Compression Running Tights", "apparel_bottom", 1599, 50,
      {"brand": "Zephyr Athletics", "gender": "unisex", "material": "nylon-spandex compression",
@@ -197,7 +216,8 @@ PRODUCTS = [
      "Full-length compression tights for muscle support on long runs and "
      "recovery days, with reflective ankle zips for low-light visibility.",
      "30-day return if unworn with tags attached.",
-     [19],),
+     [19],
+     "/products/20.jpg"),
 
     (21, "Convertible Running Pants", "apparel_bottom", 1899, 30,
      {"brand": "Apex Run", "gender": "unisex", "material": "stretch woven",
@@ -205,7 +225,8 @@ PRODUCTS = [
      "Convertible running pants with zip-off lower legs, adapting from full "
      "pants to shorts mid-run as temperature changes.",
      "30-day return if unworn with tags attached.",
-     [19, 20]),
+     [19, 20],
+     "/products/21.jpg"),
 
     # --- Outerwear (22-23) ---
     (22, "Windproof Running Jacket", "outerwear", 3499, 35,
@@ -214,7 +235,8 @@ PRODUCTS = [
      "Packable windproof running jacket that stuffs into its own pocket, "
      "reflective trim for early morning or evening runs.",
      "30-day return if unworn with tags attached.",
-     [23]),
+     [23],
+     "/products/22.jpg"),
 
     (23, "Reflective Rain Shell", "outerwear", 3999, 20,
      {"brand": "Stridewell", "gender": "unisex", "material": "waterproof ripstop",
@@ -222,54 +244,184 @@ PRODUCTS = [
      "Fully waterproof running shell with taped seams and 360-degree "
      "reflective detailing, built for rainy-season training.",
      "30-day return if unworn with tags attached.",
-     [22]),
+     [22],
+     "/products/23.jpg"),
 
     # --- Accessories (24-26) ---
     (24, "Reflective Running Cap", "accessories", 349, 110,
-     {"brand": "Nimbus Sports", "material": "quick-dry polyester", "adjustable": True},
+     {"brand": "Nimbus Sports", "gender": "unisex", "material": "quick-dry polyester", "adjustable": True},
      "Lightweight quick-dry running cap with a reflective strip and sweat "
      "wicking headband for sun and rain protection.",
      "7-day exchange only for unopened items (hygiene item).",
-     [25]),
+     [25],
+     "/products/24.jpg"),
 
     (25, "Runner's Waist Belt with Pouch", "accessories", 599, 60,
-     {"brand": "FlexFit", "material": "elastic neoprene", "pouch_capacity_ml": 250},
+     {"brand": "FlexFit", "gender": "unisex", "material": "elastic neoprene", "pouch_capacity_ml": 250},
      "Bounce-free elastic waist belt with a zippered pouch for a phone, "
      "keys, and gels, adjustable to fit most waist sizes.",
      "30-day return if unused, original packaging required.",
-     [27]),
+     [27],
+     "/products/25.jpg"),
 
     (26, "Elastic No-Tie Laces", "accessories", 299, 150,
-     {"brand": "SoleCare", "material": "elastic silicone", "one_size": True},
+     {"brand": "SoleCare", "gender": "unisex", "material": "elastic silicone", "one_size": True},
      "Elastic no-tie lace system that converts any lace-up shoe to a "
      "slip-on, popular for triathlon transitions and quick shoe changes.",
      "30-day return if unused, original packaging required.",
-     [],),
+     [],
+     "/products/26.jpg"),
 
     # --- Hydration (27) ---
     (27, "500ml Soft Flask Handheld", "hydration", 799, 55,
-     {"brand": "HydroRun", "capacity_ml": 500, "material": "BPA-free soft flask",
+     {"brand": "HydroRun", "gender": "unisex", "capacity_ml": 500, "material": "BPA-free soft flask",
       "hand_strap": True},
      "Collapsible 500ml soft flask with an ergonomic hand strap and bite "
      "valve, shrinks as you drink so it doesn't slosh.",
      "30-day return if unused, original packaging required.",
-     [25]),
+     [25],
+     "/products/27.jpg"),
 
     # --- Wearable tech (28) ---
     (28, "GPS Running Watch Lite", "wearable_tech", 4999, 25,
-     {"brand": "PulseTrack", "battery_life_days": 7, "gps": True,
+     {"brand": "PulseTrack", "gender": "unisex", "battery_life_days": 7, "gps": True,
       "heart_rate_monitor": "wrist-based", "water_resistance": "5 ATM"},
      "Entry-level GPS running watch with wrist-based heart rate, 7-day "
      "battery life, and pace/distance tracking for road and trail runs.",
      "15-day return if unopened, electronics warranty via manufacturer.",
-     [],),
+     [],
+     "/products/28.jpg"),
+
+    # --- Gender-split catalogue growth (ids 41-52; 29-40 were consumed by
+    # a rolled-back insert attempt when this batch was first applied live
+    # and are permanently skipped — Postgres sequences don't roll back).
+    # 6 women, 6 men, no changes to the original unisex 28 above. ---
+    (41, "Aria Featherlite Runner", "running_shoes", 4499, 32,
+     {"brand": "Zephyr Athletics", "gender": "women", "use_case": "road running",
+      "sizes_uk": [3, 4, 5, 6, 7, 8], "colors": ["blush/white", "teal/grey"],
+      "cushioning": "high", "weight_grams": 205},
+     "Ultra-light women's-last road running shoe with a breathable knit upper "
+     "and high-rebound foam tuned for a narrower heel-to-forefoot fit. Built "
+     "for daily 5-10K training with a smooth, propulsive ride.",
+     "30-day return if unworn, original box and tags required.",
+     [4, 1],
+     "/products/41.jpg"),
+
+    (42, "High-Waist Run Leggings", "apparel_bottom", 1699, 60,
+     {"brand": "FlexFit", "gender": "women", "material": "nylon-spandex compression",
+      "sizes": ["XS", "S", "M", "L", "XL"], "length": "full", "feature": "high-waist pocket"},
+     "Full-length high-waist compression leggings with a wide interior "
+     "waistband and a zippered back pocket for a phone or card. Squat-proof "
+     "four-way stretch fabric for long runs and studio sessions alike.",
+     "30-day return if unworn with tags attached.",
+     [20],
+     "/products/42.jpg"),
+
+    (43, "Seamless Support Running Bra Top", "apparel_top", 899, 70,
+     {"brand": "FlexFit", "gender": "women", "material": "nylon-spandex seamless knit",
+      "sizes": ["XS", "S", "M", "L", "XL"], "support_level": "medium"},
+     "Seamless medium-support running bra top with removable padding and a "
+     "racerback cut for full range of motion. Moisture-wicking knit stays "
+     "breathable through tempo runs and intervals.",
+     "7-day exchange only for unopened items (hygiene item).",
+     [18],
+     "/products/43.jpg"),
+
+    (44, "Packable Women's Rain Shell", "outerwear", 3799, 24,
+     {"brand": "Stridewell", "gender": "women", "material": "waterproof ripstop",
+      "sizes": ["XS", "S", "M", "L", "XL"], "waterproof": True, "packable": True},
+     "Fully waterproof, packable running shell cut for a women's fit, with "
+     "underarm vents and thumbhole cuffs. Stuffs into its own chest pocket "
+     "for aid-station stashing on wet long runs.",
+     "30-day return if unworn with tags attached.",
+     [23],
+     "/products/44.jpg"),
+
+    (45, "Women's Cushioned Ankle Socks 3-Pack", "socks", 449, 90,
+     {"brand": "Nimbus Sports", "gender": "women", "material": "cotton-poly blend",
+      "pack_size": 3, "sizes": ["S/M"], "style": "ankle"},
+     "Cushioned ankle-length running socks sized for a narrower women's foot, "
+     "sold in packs of 3. Arch compression band and a seamless toe to "
+     "prevent blistering on longer runs.",
+     "7-day exchange only for unopened packs (hygiene item).",
+     [9, 11],
+     "/products/45.jpg"),
+
+    (46, "250ml Women's Handheld Flask", "hydration", 699, 45,
+     {"brand": "HydroRun", "gender": "women", "capacity_ml": 250,
+      "material": "BPA-free soft flask", "hand_strap": True, "grip": "narrow"},
+     "A smaller-capacity, narrower-grip version of the soft flask handheld "
+     "sized for smaller hands, with the same collapsible bite-valve design "
+     "that shrinks as you drink.",
+     "30-day return if unused, original packaging required.",
+     [27],
+     "/products/46.jpg"),
+
+    (47, "Ridge Runner Trail Pro", "running_shoes", 5999, 26,
+     {"brand": "Apex Run", "gender": "men", "use_case": "trail running",
+      "sizes_uk": [7, 8, 9, 10, 11, 12], "colors": ["graphite/lime", "black/orange"],
+      "cushioning": "high", "weight_grams": 295, "waterproof": True},
+     "Aggressive-lug trail shoe with a rock plate underfoot and a waterproof "
+     "membrane for technical, wet terrain. Wider men's-last fit with a "
+     "reinforced toe cap for root and rock strikes.",
+     "30-day return if unworn, original box and tags required.",
+     [2],
+     "/products/47.jpg"),
+
+    (48, "Men's Thermal Running Vest", "outerwear", 2799, 30,
+     {"brand": "Apex Run", "gender": "men", "material": "brushed thermal poly",
+      "sizes": ["S", "M", "L", "XL", "XXL"], "use_case": "cold weather"},
+     "Insulated sleeveless running vest for cold-weather training, with a "
+     "windproof front panel and a brushed thermal back. Layers cleanly over "
+     "a long-sleeve top without restricting arm swing.",
+     "30-day return if unworn with tags attached.",
+     [22],
+     "/products/48.jpg"),
+
+    (49, "GPS Running Watch Pro", "wearable_tech", 7999, 18,
+     {"brand": "PulseTrack", "gender": "men", "battery_life_days": 14, "gps": True,
+      "heart_rate_monitor": "wrist-based", "water_resistance": "10 ATM", "band_size": "large"},
+     "Multisport GPS watch with a larger men's-sizing band, 14-day battery "
+     "life, and dual-frequency GPS for accurate pace tracking under tree "
+     "cover. Adds a structured workout builder on top of the entry-level "
+     "Lite model.",
+     "15-day return if unopened, electronics warranty via manufacturer.",
+     [28],
+     "/products/49.jpg"),
+
+    (50, "Men's Lined Running Tights", "apparel_bottom", 1799, 55,
+     {"brand": "Zephyr Athletics", "gender": "men", "material": "thermal-lined compression",
+      "sizes": ["S", "M", "L", "XL"], "length": "full", "use_case": "cold weather"},
+     "Brushed thermal-lined compression tights for cold-weather training "
+     "runs, with a wide reflective ankle zip and a fleece-backed waistband "
+     "for warmth without bulk.",
+     "30-day return if unworn with tags attached.",
+     [20],
+     "/products/50.jpg"),
+
+    (51, "Men's Reflective Long Sleeve Tee", "apparel_top", 1199, 65,
+     {"brand": "Stridewell", "gender": "men", "material": "polyester mesh",
+      "sizes": ["S", "M", "L", "XL", "XXL"], "feature": "360-degree reflective print"},
+     "Long-sleeve running tee with a 360-degree reflective print across the "
+     "chest and back for early-morning and evening visibility, flatlock "
+     "seams to prevent chafing on long runs.",
+     "30-day return if unworn with tags attached.",
+     [16],
+     "/products/51.jpg"),
+
+    (52, "Men's Compression Calf Sleeves", "accessories", 599, 80,
+     {"brand": "FlexFit", "gender": "men", "material": "nylon-spandex compression",
+      "sizes": ["S/M", "L/XL"], "use_case": "recovery and support"},
+     "Graduated compression calf sleeves for shin and calf support during "
+     "runs or for recovery afterward, with a silicone top band to stay in "
+     "place without cutting off circulation.",
+     "30-day return if unused, original packaging required.",
+     [9],
+     "/products/52.jpg"),
 ]
 
 # ---------------------------------------------------------------------------
-# Co-purchase stats: (product_a_id, product_b_id, rate). Rates model
-# realistic merchandising patterns: shoes pair strongly with socks and
-# insoles, weakly with unrelated accessories; apparel pairs across
-# tops/bottoms/outerwear; a few plausible cross-category pairs.
+# Co-purchase stats: (product_a_id, product_b_id, rate).
 # ---------------------------------------------------------------------------
 
 CO_PURCHASE_STATS = [
@@ -296,6 +448,15 @@ CO_PURCHASE_STATS = [
     (28, 27, 0.19),
     # Cap + waist belt (accessory bundle)
     (24, 25, 0.23),
+    # Gender-split growth (ids 41-52, see PRODUCTS above)
+    (41, 45, 0.55),  # Aria Featherlite Runner -> Women's Cushioned Ankle Socks
+    (41, 46, 0.22),  # Aria Featherlite Runner -> 250ml Women's Handheld Flask
+    (42, 43, 0.41),  # High-Waist Run Leggings -> Seamless Support Running Bra Top
+    (44, 42, 0.24),  # Packable Women's Rain Shell -> High-Waist Run Leggings
+    (47, 52, 0.33),  # Ridge Runner Trail Pro -> Men's Compression Calf Sleeves
+    (50, 51, 0.38),  # Men's Lined Running Tights -> Men's Reflective Long Sleeve Tee
+    (48, 50, 0.27),  # Men's Thermal Running Vest -> Men's Lined Running Tights
+    (49, 27, 0.21),  # GPS Running Watch Pro -> 500ml Soft Flask Handheld
 ]
 
 # ---------------------------------------------------------------------------
@@ -322,11 +483,6 @@ AGENTS = [
         "permissions": {"can_apply_discount": True, "requires_approval": False},
     },
     {
-        # budget_limit is well above any single item's price so the agent
-        # never runs out of *budget*, but items priced above
-        # approval_required_above (2000) still route through the
-        # approval-request path per merchant_policy regardless of budget
-        # headroom — that's the demo trigger, not the budget ceiling.
         "type": "ai_agent",
         "name": "Shopping Assistant Agent",
         "budget_limit": Decimal("5000.00"),
@@ -342,16 +498,16 @@ def main() -> None:
         conn.execute("DELETE FROM agent WHERE name IN (%s, %s)",
                       (AGENTS[0]["name"], AGENTS[1]["name"]))
 
-        for (pid, name, category, price, stock, attrs, desc, policy, subs) in PRODUCTS:
+        for (pid, name, category, price, stock, attrs, desc, policy, subs, img_url) in PRODUCTS:
             conn.execute(
                 """
                 INSERT INTO product
                     (id, name, category, price, stock, structured_attributes,
-                     semantic_description, return_policy, substitute_ids)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                     semantic_description, return_policy, substitute_ids, image_url)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (pid, name, category, Decimal(price), stock, psycopg.types.json.Jsonb(attrs),
-                 desc, policy, subs),
+                 desc, policy, subs, img_url),
             )
         conn.execute("SELECT setval('product_id_seq', (SELECT max(id) FROM product))")
         print(f"inserted {len(PRODUCTS)} products")

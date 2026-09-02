@@ -1,0 +1,102 @@
+{
+  "document": "AI Commerce Passport",
+  "generated_at": "2026-09-02T13:43:24.112247+00:00",
+  "merchants": [
+    {
+      "merchant": {
+        "id": 1,
+        "name": "Shopfront Running Co.",
+        "slug": "shopfront-running-co"
+      },
+      "what_this_merchant_sells": {
+        "catalog_size": 40,
+        "categories": [
+          "accessories",
+          "apparel_bottom",
+          "apparel_top",
+          "hydration",
+          "insoles",
+          "outerwear",
+          "running_shoes",
+          "socks",
+          "wearable_tech"
+        ]
+      },
+      "what_an_ai_agent_may_do": {
+        "browse": true,
+        "cart": true,
+        "purchase_autonomously_up_to": 2000.0,
+        "purchase_above_that_requires": "merchant approval (pauses the checkout pipeline until resolved via the merchant dashboard)",
+        "max_discount_pct": 15.0,
+        "max_autonomous_purchase_amount": 2000.0,
+        "allowed_payment_methods": [
+          "card",
+          "upi"
+        ]
+      },
+      "mcp_tool_surface": [
+        {
+          "name": "search_catalog",
+          "description": "Search the product catalog by natural-language query, category, price ceiling, and stock \u2014 hybrid keyword + semantic + structured-filter search."
+        },
+        {
+          "name": "get_product",
+          "description": "Fetch full detail for one product, including cross-sell/co-purchase data and substitute products."
+        },
+        {
+          "name": "checkout",
+          "description": "Buy a quantity of one product as the AI buyer agent, through the same checkout pipeline (intent -> retrieve -> recommend -> policy check -> authorization -> Razorpay -> verification) a human shopper's purchase goes through. Returns completed, pending_approval, or failed."
+        },
+        {
+          "name": "check_order_status",
+          "description": "Poll the current status of a previously placed order."
+        }
+      ]
+    },
+    {
+      "merchant": {
+        "id": 2,
+        "name": "Roast & Ritual",
+        "slug": "roast-and-ritual"
+      },
+      "what_this_merchant_sells": {
+        "catalog_size": 10,
+        "categories": [
+          "brew_equipment",
+          "coffee_beans",
+          "drinkware"
+        ]
+      },
+      "what_an_ai_agent_may_do": {
+        "browse": true,
+        "cart": true,
+        "purchase_autonomously_up_to": 5000.0,
+        "purchase_above_that_requires": "merchant approval (pauses the checkout pipeline until resolved via the merchant dashboard)",
+        "max_discount_pct": 25.0,
+        "max_autonomous_purchase_amount": 5000.0,
+        "allowed_payment_methods": [
+          "card",
+          "upi"
+        ]
+      },
+      "mcp_tool_surface": [
+        {
+          "name": "search_catalog",
+          "description": "Search the product catalog by natural-language query, category, price ceiling, and stock \u2014 hybrid keyword + semantic + structured-filter search."
+        },
+        {
+          "name": "get_product",
+          "description": "Fetch full detail for one product, including cross-sell/co-purchase data and substitute products."
+        },
+        {
+          "name": "checkout",
+          "description": "Buy a quantity of one product as the AI buyer agent, through the same checkout pipeline (intent -> retrieve -> recommend -> policy check -> authorization -> Razorpay -> verification) a human shopper's purchase goes through. Returns completed, pending_approval, or failed."
+        },
+        {
+          "name": "check_order_status",
+          "description": "Poll the current status of a previously placed order."
+        }
+      ]
+    }
+  ]
+}

@@ -1,111 +1,90 @@
+/* ---------------------------------------------------------------------
+   Token system — shared by the shopper page and the merchant console, so
+   both read as one product. Grounded in a checkpoint race, not generic
+   ecommerce: a human shopper and an AI buying agent walk the same
+   intent -> retrieve -> recommend -> policy -> authorize -> pay -> verify
+   pipeline, like runners passing checkpoints on one course.
+
+     #FFFFFF "bib white"        — stark race-bib white, the page's base
+              surface and every card/input on it — one flat surface, not
+              two tones, so the glow below is the only thing that lifts
+              off the page.
+     #12181A "predawn"          — near-black with a cold cast, the sky in
+              the minutes before a race start. Primary text and default
+              buttons.
+     #F2986B "dawn"             — the peach-orange of first light breaking
+              over that same predawn sky at the start line. The one accent
+              color: the checkpoint trail a human buyer and an AI agent both
+              pass through, AI-agent badges/meters, and a soft blurred glow
+              behind the hero search box — never a decorative fill.
+     #2E7D4F "negative split"   — a runner's term for finishing a half
+              faster than it started, i.e. on pace. Connected/approved state.
+     #B23B2E "DNF"              — the color a results board flags a
+              did-not-finish with. Disconnected/failed/over-threshold state.
+   ------------------------------------------------------------------- */
 :root {
-  --text: #6b6375;
-  --text-h: #08060d;
-  --bg: #fff;
-  --border: #e5e4e7;
-  --code-bg: #f4f3ec;
-  --accent: #aa3bff;
-  --accent-bg: rgba(170, 59, 255, 0.1);
-  --accent-border: rgba(170, 59, 255, 0.5);
-  --social-bg: rgba(244, 243, 236, 0.5);
-  --shadow:
-    rgba(0, 0, 0, 0.1) 0 10px 15px -3px, rgba(0, 0, 0, 0.05) 0 4px 6px -2px;
+  --paper: #ffffff;
+  --paper-raised: #ffffff;
+  --paper-sunken: #f2f2f0;
+  --ink: #0d1012;
+  --ink-soft: #6b6e73;
+  --ink-faint: #9a9da2;
+  --line: #e7e6e2;
+  --line-strong: #d2d0c9;
 
-  --sans: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --heading: system-ui, 'Segoe UI', Roboto, sans-serif;
-  --mono: ui-monospace, Consolas, monospace;
+  --dawn: #f2986b;
+  --dawn-dark: #c06a3c;
+  --dawn-soft: rgba(242, 152, 107, 0.14);
+  --dawn-glow: rgba(242, 152, 107, 0.22);
 
-  font: 18px/145% var(--sans);
-  letter-spacing: 0.18px;
-  color-scheme: light dark;
-  color: var(--text);
-  background: var(--bg);
-  font-synthesis: none;
-  text-rendering: optimizeLegibility;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+  --good: #2e7d4f;
+  --good-soft: #e3f0e8;
+  --bad: #b23b2e;
+  --bad-soft: #f7e6e3;
 
-  @media (max-width: 1024px) {
-    font-size: 16px;
-  }
+  --font-display: "Playfair Display", Georgia, serif;
+  --font-body: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --text: #9ca3af;
-    --text-h: #f3f4f6;
-    --bg: #16171d;
-    --border: #2e303a;
-    --code-bg: #1f2028;
-    --accent: #c084fc;
-    --accent-bg: rgba(192, 132, 252, 0.15);
-    --accent-border: rgba(192, 132, 252, 0.5);
-    --social-bg: rgba(47, 48, 58, 0.5);
-    --shadow:
-      rgba(0, 0, 0, 0.4) 0 10px 15px -3px, rgba(0, 0, 0, 0.25) 0 4px 6px -2px;
-  }
-
-  #social .button-icon {
-    filter: invert(1) brightness(2);
-  }
+* {
+  box-sizing: border-box;
 }
 
 body {
   margin: 0;
+  font-family: var(--font-body);
+  background: var(--paper);
+  color: var(--ink);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
 }
 
 #root {
-  width: 1126px;
-  max-width: 100%;
-  margin: 0 auto;
-  text-align: center;
-  border-inline: 1px solid var(--border);
   min-height: 100svh;
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
 }
 
 h1,
-h2 {
-  font-family: var(--heading);
-  font-weight: 500;
-  color: var(--text-h);
-}
-
-h1 {
-  font-size: 56px;
-  letter-spacing: -1.68px;
-  margin: 32px 0;
-  @media (max-width: 1024px) {
-    font-size: 36px;
-    margin: 20px 0;
-  }
-}
-h2 {
-  font-size: 24px;
-  line-height: 118%;
-  letter-spacing: -0.24px;
-  margin: 0 0 8px;
-  @media (max-width: 1024px) {
-    font-size: 20px;
-  }
-}
-p {
+h2,
+h3 {
+  font-family: var(--font-display);
+  font-weight: 700;
   margin: 0;
 }
 
-code,
-.counter {
-  font-family: var(--mono);
-  display: inline-flex;
-  border-radius: 4px;
-  color: var(--text-h);
+button,
+input {
+  font-family: inherit;
 }
 
-code {
-  font-size: 15px;
-  line-height: 135%;
-  padding: 4px 8px;
-  background: var(--code-bg);
+:focus-visible {
+  outline: 2px solid var(--dawn);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    transition-duration: 0.001ms !important;
+  }
 }
