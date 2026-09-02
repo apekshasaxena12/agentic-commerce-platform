@@ -84,6 +84,34 @@ _razorpay_order_to_thread: dict[str, str] = {}
 _pending_interrupt: dict[str, str] = {}
 
 
+async def _safe_send(websocket: WebSocket, payload: dict, thread_id: Optional[str] = None) -> bool:
+    """
+    Every websocket.send_json call in this module goes through here instead
+    of calling it directly. The client can disappear at any point while a
+    pipeline run is still in flight in its worker thread — a closed tab, or
+    (the more likely real-world case, per a live Render incident) an
+    idle-connection timeout somewhere in the network path firing during a
+    slow/cold-started run that produces no traffic for a while. The first
+    send attempted afterward raises RuntimeError("Cannot call \"send\" once
+    a close message has been sent.") from Starlette, or WebSocketDisconnect
+    — neither is a bug in the result being sent, it's just stale. Letting
+    that propagate unhandled crashes the whole ASGI connection (and, worse,
+    does it silently from the frontend's point of view: no message ever
+    arrives, so `busy` never clears and the UI hangs forever). Logged, not
+    swallowed silently, so a real pattern of this is visible in server logs.
+    """
+    try:
+        await websocket.send_json(payload)
+        return True
+    except (RuntimeError, WebSocketDisconnect) as exc:
+        print(
+            f"[ws {thread_id}] send skipped, socket already closed "
+            f"(type={payload.get('type')!r}): {exc!r}",
+            flush=True,
+        )
+        return False
+
+
 def _make_on_audit(thread_id: str):
     """
     Callback passed to run_pipeline/resume_pipeline as `on_audit`. Runs
@@ -99,9 +127,13 @@ def _make_on_audit(thread_id: str):
         if ws is None:
             return
         try:
-            anyio.from_thread.run(ws.send_json, {"type": "audit_entry", **entry})
-        except Exception:
-            pass  # best-effort live push; a dead/slow socket must not break the pipeline
+            anyio.from_thread.run(_safe_send, ws, {"type": "audit_entry", **entry}, thread_id)
+        except Exception as exc:
+            # _safe_send itself never raises for a dead socket (see above) —
+            # this is a backstop for anything else going wrong scheduling
+            # onto the event loop, kept broad because a live pipeline run
+            # must never be broken by a best-effort UI push failing.
+            print(f"[ws {thread_id}] audit push failed unexpectedly: {exc!r}", flush=True)
 
     return _on_audit
 
@@ -111,11 +143,24 @@ async def ws_chat(websocket: WebSocket) -> None:
     await websocket.accept()
     thread_id = str(uuid.uuid4())
     _connections[thread_id] = websocket
-    await websocket.send_json({"type": "connected", "thread_id": thread_id})
+    await _safe_send(websocket, {"type": "connected", "thread_id": thread_id}, thread_id)
 
     try:
         while True:
-            data = await websocket.receive_json()
+            try:
+                data = await websocket.receive_json()
+            except RuntimeError:
+                # Starlette raises this (not WebSocketDisconnect) specifically
+                # when the socket was already torn down earlier in this
+                # connection's lifetime — e.g. a slow pipeline run's _safe_send
+                # calls above already discovered the client was gone and
+                # logged it there; this is just the next receive() on the same
+                # dead connection surfacing the same fact. Narrowly scoped to
+                # this one call (not the whole loop body) so an unrelated
+                # RuntimeError from inside a handler — a real bug — still
+                # propagates and gets logged loudly instead of being mistaken
+                # for a closed socket.
+                break
             msg_type = data.get("type")
 
             if msg_type == "message":
@@ -133,8 +178,8 @@ async def ws_chat(websocket: WebSocket) -> None:
             elif msg_type == "checkout_outcome":
                 await _handle_checkout_outcome(websocket, thread_id, data)
             else:
-                await websocket.send_json(
-                    {"type": "error", "message": f"unknown message type: {msg_type!r}"}
+                await _safe_send(
+                    websocket, {"type": "error", "message": f"unknown message type: {msg_type!r}"}, thread_id
                 )
     except WebSocketDisconnect:
         pass
@@ -195,8 +240,8 @@ async def _handle_browse(websocket: WebSocket, filters: dict) -> None:
     results = await anyio.to_thread.run_sync(
         functools.partial(search_products, "running gear and apparel", filters, 10)
     )
-    await websocket.send_json({"type": "search_results", "results": _serialize_products(results)})
-    await websocket.send_json({"type": "turn_complete"})
+    await _safe_send(websocket, {"type": "search_results", "results": _serialize_products(results)})
+    await _safe_send(websocket, {"type": "turn_complete"})
 
 
 async def _handle_message(websocket: WebSocket, thread_id: str, text: str) -> None:
@@ -223,8 +268,8 @@ async def _handle_checkout_product(
     # downstream pipeline (recommend/policy_check/authorization/razorpay/
     # verification), same _emit_result handling either way.
     if product_id is None:
-        await websocket.send_json({"type": "error", "message": "checkout_product requires a product_id"})
-        await websocket.send_json({"type": "turn_complete"})
+        await _safe_send(websocket, {"type": "error", "message": "checkout_product requires a product_id"}, thread_id)
+        await _safe_send(websocket, {"type": "turn_complete"}, thread_id)
         return
 
     initial_state = {
@@ -252,8 +297,8 @@ async def _handle_checkout_cart(websocket: WebSocket, thread_id: str, items: lis
     # payment), at the cost of losing per-item failure isolation — if this
     # one payment fails, the whole cart fails together.
     if not items:
-        await websocket.send_json({"type": "error", "message": "checkout_cart requires at least one item"})
-        await websocket.send_json({"type": "turn_complete"})
+        await _safe_send(websocket, {"type": "error", "message": "checkout_cart requires at least one item"}, thread_id)
+        await _safe_send(websocket, {"type": "turn_complete"}, thread_id)
         return
 
     initial_state = {
@@ -272,20 +317,22 @@ async def _handle_checkout_cart(websocket: WebSocket, thread_id: str, items: lis
 async def _handle_confirm(websocket: WebSocket, thread_id: str, decision: str) -> None:
     pending = _pending_interrupt.get(thread_id)
     if pending != "human_confirm_required":
-        await websocket.send_json(
+        await _safe_send(
+            websocket,
             {
                 "type": "error",
                 "message": (
                     "no confirm is pending for this chat right now "
                     f"(pending={pending!r}) — ignoring, likely a duplicate click"
                 ),
-            }
+            },
+            thread_id,
         )
         # Every other path ends with turn_complete via _emit_result — this
         # early return must too, or the frontend's `busy` flag (cleared
         # only on turn_complete) gets stuck forever after a rejected
         # duplicate.
-        await websocket.send_json({"type": "turn_complete"})
+        await _safe_send(websocket, {"type": "turn_complete"}, thread_id)
         return
 
     on_audit = _make_on_audit(thread_id)
@@ -349,16 +396,18 @@ def _build_webhook_from_checkout_outcome(data: dict) -> dict:
 async def _handle_checkout_outcome(websocket: WebSocket, thread_id: str, data: dict) -> None:
     pending = _pending_interrupt.get(thread_id)
     if pending != "webhook_required":
-        await websocket.send_json(
+        await _safe_send(
+            websocket,
             {
                 "type": "error",
                 "message": (
                     "no checkout is pending for this chat right now "
                     f"(pending={pending!r}) — ignoring, likely a duplicate Checkout.js callback"
                 ),
-            }
+            },
+            thread_id,
         )
-        await websocket.send_json({"type": "turn_complete"})
+        await _safe_send(websocket, {"type": "turn_complete"}, thread_id)
         return
 
     payload = _build_webhook_from_checkout_outcome(data)
@@ -371,10 +420,10 @@ async def _handle_checkout_outcome(websocket: WebSocket, thread_id: str, data: d
 
 async def _emit_result(websocket: WebSocket, thread_id: str, result: dict) -> None:
     if result.get("search_results") is not None:
-        await websocket.send_json({"type": "search_results", "results": result["search_results"]})
+        await _safe_send(websocket, {"type": "search_results", "results": result["search_results"]}, thread_id)
 
     if result.get("recommendation"):
-        await websocket.send_json({"type": "recommendation", **result["recommendation"]})
+        await _safe_send(websocket, {"type": "recommendation", **result["recommendation"]}, thread_id)
 
     interrupts = result.get("__interrupt__")
     if interrupts:
@@ -383,36 +432,40 @@ async def _emit_result(websocket: WebSocket, thread_id: str, result: dict) -> No
         _pending_interrupt[thread_id] = itype
 
         if itype == "human_confirm_required":
-            await websocket.send_json(
+            await _safe_send(
+                websocket,
                 {
                     "type": "awaiting_confirm",
                     "order_id": value["order_id"],
                     "amount": value["amount"],
-                }
+                },
+                thread_id,
             )
         elif itype == "webhook_required":
             razorpay_order_id = value["razorpay_order_id"]
             _razorpay_order_to_thread[razorpay_order_id] = thread_id
-            await websocket.send_json(
+            await _safe_send(
+                websocket,
                 {
                     "type": "start_checkout",
                     "order_id": value["order_id"],
                     "razorpay_order_id": razorpay_order_id,
                     "amount": result.get("amount"),
                     "key_id": RAZORPAY_KEY_ID,
-                }
+                },
+                thread_id,
             )
         else:
-            await websocket.send_json({"type": "paused", "detail": value})
+            await _safe_send(websocket, {"type": "paused", "detail": value}, thread_id)
     else:
         # graph reached a terminal state (or ended after retrieve/policy_check)
         # for this thread — nothing is pending anymore.
         _pending_interrupt.pop(thread_id, None)
         if result.get("final_status"):
-            await websocket.send_json({"type": "final_status", "status": result["final_status"]})
+            await _safe_send(websocket, {"type": "final_status", "status": result["final_status"]}, thread_id)
         elif result.get("authorized") is False:
-            await websocket.send_json(
-                {"type": "order_failed", "reason": result.get("authorization_reason")}
+            await _safe_send(
+                websocket, {"type": "order_failed", "reason": result.get("authorization_reason")}, thread_id
             )
         elif result.get("policy_passed") is False:
             # route_after_policy_check sends a failed check straight to END —
@@ -427,11 +480,13 @@ async def _emit_result(websocket: WebSocket, thread_id: str, result: dict) -> No
             failed_reasons = "; ".join(
                 c["reason"] for c in result.get("policy_checks", []) if not c.get("passed")
             )
-            await websocket.send_json(
-                {"type": "order_failed", "reason": failed_reasons or "Order did not pass policy checks."}
+            await _safe_send(
+                websocket,
+                {"type": "order_failed", "reason": failed_reasons or "Order did not pass policy checks."},
+                thread_id,
             )
 
-    await websocket.send_json({"type": "turn_complete"})
+    await _safe_send(websocket, {"type": "turn_complete"}, thread_id)
 
 
 @app.post("/webhooks/razorpay")
@@ -479,7 +534,7 @@ async def razorpay_webhook(request: Request) -> dict:
 
     ws = _connections.get(thread_id)
     if ws is not None:
-        await ws.send_json({"type": "final_status", "status": result.get("final_status")})
-        await ws.send_json({"type": "turn_complete"})
+        await _safe_send(ws, {"type": "final_status", "status": result.get("final_status")}, thread_id)
+        await _safe_send(ws, {"type": "turn_complete"}, thread_id)
 
     return {"status": "ok", "final_status": result.get("final_status")}

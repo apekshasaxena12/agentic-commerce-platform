@@ -25,7 +25,10 @@ const WS_URL = import.meta.env.VITE_WS_URL || "ws://localhost:8000/ws/chat";
 const PENDING_QUERY_KEY = "shopfront_pending_query";
 const _pendingRaw = sessionStorage.getItem(PENDING_QUERY_KEY);
 sessionStorage.removeItem(PENDING_QUERY_KEY);
-const pendingPayloadAtLoad = _pendingRaw ? JSON.parse(_pendingRaw) : null;
+// let, not const: cleared after its one replay in the "connected" case below
+// so a later reconnect (see connect()'s ws.onclose) doesn't re-send the
+// original landing-page query a second time.
+let pendingPayloadAtLoad = _pendingRaw ? JSON.parse(_pendingRaw) : null;
 
 function ProductCard({ product, onBuy, onOpenDetail, disabled }) {
   const [imageError, setImageError] = useState(false);
@@ -122,6 +125,7 @@ export default function Results() {
   const [auditEntries, setAuditEntries] = useState([]);
   const [busy, setBusy] = useState(false);
   const [checkoutPending, setCheckoutPending] = useState(false);
+  const [connectionLost, setConnectionLost] = useState(false);
   const wsRef = useRef(null);
   const checkoutInfoRef = useRef(null);
   // "recommendation" persists in the LangGraph checkpoint state once set,
@@ -129,6 +133,23 @@ export default function Results() {
   // same checkout (confirm, then again after the webhook) — this dedupes
   // so the callout renders once per checkout instead of three times.
   const lastRecommendationRef = useRef(null);
+  // Distinguishes an intentional close (component unmount, e.g. navigating
+  // away) from an unexpected one (network drop, a proxy's idle-connection
+  // timeout during a slow pipeline run, or the server itself losing the
+  // socket) — onclose fires either way, but only the latter should show the
+  // "connection lost" banner and trigger a reconnect.
+  const isUnmountingRef = useRef(false);
+  // Read inside ws.onclose, which — like ws.onmessage — is wired up once at
+  // mount and would otherwise close over stale state (same reasoning as
+  // cartProcessingRef above).
+  const pendingRequestRef = useRef(false);
+  useEffect(() => {
+    pendingRequestRef.current = busy || checkoutPending || !!awaitingConfirm;
+  }, [busy, checkoutPending, awaitingConfirm]);
+  // At most one automatic reconnect — if that one also fails, the banner's
+  // manual "Reconnect" button is still there, rather than silently retrying
+  // forever.
+  const autoReconnectedRef = useRef(false);
 
   // --- Cart + product modal state (Part 2/3/4) ---
   const [cart, setCart] = useState(() => loadCart());
@@ -147,20 +168,28 @@ export default function Results() {
   const cartProcessingRef = useRef(false);
   const cartSnapshotRef = useRef([]);
 
-  useEffect(() => {
+  // Extracted so the automatic/manual reconnect below can call it again with
+  // the exact same wiring — a fresh WebSocket always gets a fresh thread_id
+  // from the server (see server/app.py's ws_chat), so this is a new chat
+  // session, not a resume of whatever was in flight on the old one.
+  function connect() {
     const ws = new WebSocket(WS_URL);
     wsRef.current = ws;
 
     ws.onmessage = (event) => {
       const msg = JSON.parse(event.data);
       switch (msg.type) {
-        case "connected":
-          if (pendingPayloadAtLoad?.kind === "browse") {
-            sendBrowse(pendingPayloadAtLoad.label, pendingPayloadAtLoad.filters);
-          } else if (pendingPayloadAtLoad?.kind === "message") {
-            sendChatMessage(pendingPayloadAtLoad.text);
+        case "connected": {
+          setConnectionLost(false);
+          const pending = pendingPayloadAtLoad;
+          pendingPayloadAtLoad = null;
+          if (pending?.kind === "browse") {
+            sendBrowse(pending.label, pending.filters);
+          } else if (pending?.kind === "message") {
+            sendChatMessage(pending.text);
           }
           break;
+        }
         case "audit_entry":
           setAuditEntries((prev) => [...prev, msg]);
           break;
@@ -242,7 +271,47 @@ export default function Results() {
       }
     };
 
-    return () => ws.close();
+    ws.onerror = () => {
+      // Always followed by onclose (per the WebSocket spec) — the actual
+      // user-facing handling (banner, clearing busy, reconnect) lives there
+      // so it isn't duplicated; this is just for local debugging visibility.
+      console.error("WebSocket error on", WS_URL);
+    };
+
+    ws.onclose = () => {
+      if (isUnmountingRef.current) return; // a real navigation-away, not a drop
+
+      setBusy(false);
+      setCheckoutPending(false);
+      setAwaitingConfirm(null);
+      setConnectionLost(true);
+      addMessage(
+        "system",
+        pendingRequestRef.current
+          ? "Connection lost while your last request was still in progress. It may or may not have completed on the server — check your order/cart before retrying a purchase."
+          : "Connection lost."
+      );
+
+      if (!autoReconnectedRef.current) {
+        autoReconnectedRef.current = true;
+        setTimeout(() => {
+          if (!isUnmountingRef.current) connect();
+        }, 1500);
+      }
+    };
+
+    return ws;
+  }
+
+  useEffect(() => {
+    isUnmountingRef.current = false;
+    connect();
+    return () => {
+      // wsRef.current, not a captured local — an automatic reconnect above
+      // may have replaced it with a newer socket by the time this runs.
+      isUnmountingRef.current = true;
+      wsRef.current?.close();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -375,6 +444,11 @@ export default function Results() {
     send({ type: "checkout_cart", items });
   }
 
+  function handleManualReconnect() {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
+    connect();
+  }
+
   function sendConfirm(decision) {
     // Hide the confirm box immediately (optimistic), not just after the
     // server round-trip — otherwise a fast double-click can fire "confirm"
@@ -479,6 +553,15 @@ export default function Results() {
 
       <div className="app-body results-body">
         <div className="main-column">
+          {connectionLost && (
+            <div className="connection-banner">
+              <span>Connection lost — reconnecting automatically. If this doesn't clear, use the button.</span>
+              <button type="button" onClick={handleManualReconnect}>
+                Reconnect
+              </button>
+            </div>
+          )}
+
           {cartProcessing && (
             <div className="cart-progress">
               Processing your order — {cart.length} item{cart.length !== 1 ? "s" : ""}: {cart.map((i) => i.name).join(", ")}…
