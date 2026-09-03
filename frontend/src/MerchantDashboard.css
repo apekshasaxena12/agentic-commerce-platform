@@ -472,6 +472,40 @@
   font-family: var(--font-mono);
 }
 
+.suggestion-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.suggestion-card:last-child {
+  margin-bottom: 0;
+}
+
+.suggestion-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
+.suggestion-count {
+  font-family: var(--font-mono);
+  color: var(--ink-soft);
+}
+
+.suggestion-list {
+  margin: 0.5rem 0 0;
+  padding-left: 1.1rem;
+  font-size: 0.85rem;
+}
+
+.suggestion-list li {
+  margin-bottom: 0.35rem;
+}
+
 .step-chip::before {
   content: "";
   width: 0.4rem;

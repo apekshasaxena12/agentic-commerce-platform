@@ -363,6 +363,100 @@ function IncidentCenter() {
   );
 }
 
+// Day 17: own tab ("AI Command Center"), grouped with Incident Center and
+// AI Commerce Score — all three are computed-signal summaries, distinct
+// from the day-to-day Stock/Approvals/Audit tabs. Renders whatever
+// suggestion types GET /merchant/growth-suggestions actually returned —
+// repeat_purchase is omitted server-side entirely when no product
+// qualifies, per the task's "don't force a suggestion that isn't there";
+// the other three always appear, showing a real 0 when that's the honest
+// answer, since a real zero is still real information.
+function GrowthSuggestions() {
+  const [suggestions, setSuggestions] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  async function refresh() {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/growth-suggestions`, { credentials: "include" });
+      if (!res.ok) throw new Error(await describeError(res));
+      setSuggestions(await res.json());
+    } catch (err) {
+      setError(err.message || "Could not reach the merchant API");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    refresh();
+  }, []);
+
+  return (
+    <section className="panel">
+      <div className="panel-header">
+        <h2>Growth Suggestions</h2>
+        <button className="refresh" onClick={refresh}>
+          Refresh
+        </button>
+      </div>
+      <p className="muted small">
+        Real, computed opportunities from your own catalog and order data — no invented revenue numbers.
+      </p>
+      {error && <div className="banner-error">{error}</div>}
+      {loading && <p className="muted">Loading…</p>}
+      {suggestions && suggestions.length === 0 && <p className="muted">No suggestions available yet.</p>}
+      {suggestions &&
+        suggestions.map((s) => (
+          <div key={s.type} className="suggestion-card">
+            <div className="suggestion-card-head">
+              <span>{s.title}</span>
+              <span className="suggestion-count">{s.count}</span>
+            </div>
+            <p className="muted small">{s.why_it_matters}</p>
+            {s.count === 0 && <p className="muted small">None found.</p>}
+            {s.type === "bundle_opportunity" && s.items.length > 0 && (
+              <ul className="suggestion-list">
+                {s.items.map((it, i) => (
+                  <li key={i}>{it.text}</li>
+                ))}
+              </ul>
+            )}
+            {s.type === "cross_sell_gap" && s.items.length > 0 && (
+              <ul className="suggestion-list">
+                {s.items.map((it) => (
+                  <li key={it.id}>
+                    #{it.id} {it.name}
+                  </li>
+                ))}
+              </ul>
+            )}
+            {s.type === "low_stock_high_velocity" && s.items.length > 0 && (
+              <ul className="suggestion-list">
+                {s.items.map((it) => (
+                  <li key={it.id}>
+                    #{it.id} {it.name} — {it.stock} in stock
+                  </li>
+                ))}
+              </ul>
+            )}
+            {s.type === "repeat_purchase" && s.items.length > 0 && (
+              <ul className="suggestion-list">
+                {s.items.map((it) => (
+                  <li key={it.id}>
+                    #{it.id} {it.name} — repurchased by {it.repeat_agent_count} agent(s)
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        ))}
+    </section>
+  );
+}
+
 // Day 16: own tab, placed next to Incident Center — both are "system
 // health" style summaries (as opposed to Stock/Approvals/Audit's
 // day-to-day operational views), so grouping them keeps the nav
@@ -697,6 +791,9 @@ export default function MerchantDashboard() {
         <button className={tab === "score" ? "active" : ""} onClick={() => setTab("score")}>
           AI Commerce Score
         </button>
+        <button className={tab === "growth" ? "active" : ""} onClick={() => setTab("growth")}>
+          Growth Suggestions
+        </button>
         <button className={tab === "agents" ? "active" : ""} onClick={() => setTab("agents")}>
           Agents
         </button>
@@ -708,6 +805,7 @@ export default function MerchantDashboard() {
         {tab === "audit" && <AuditTrail />}
         {tab === "incidents" && <IncidentCenter />}
         {tab === "score" && <AICommerceScore />}
+        {tab === "growth" && <GrowthSuggestions />}
         {tab === "agents" && <AgentOverview />}
       </main>
     </div>
