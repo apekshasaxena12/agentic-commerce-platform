@@ -272,13 +272,26 @@ function AgentOverview() {
                   <span className={`agent-badge ${a.type}`}>{a.type === "ai_agent" ? "AI agent" : "Human"}</span>
                   <span className="agent-name">{a.name}</span>
                 </div>
-                <div className="budget-bar">
-                  <div className={`budget-fill ${a.type}`} style={{ width: `${pct}%` }} />
-                </div>
-                <div className="budget-numbers">
-                  <span>{formatMoney(a.spent_so_far)} spent</span>
-                  <span className="muted">of {formatMoney(a.budget_limit)}</span>
-                </div>
+                {a.type === "ai_agent" ? (
+                  <>
+                    <div className="budget-bar">
+                      <div className={`budget-fill ${a.type}`} style={{ width: `${pct}%` }} />
+                    </div>
+                    <div className="budget-numbers">
+                      <span>{formatMoney(a.spent_so_far)} spent</span>
+                      <span className="muted">of {formatMoney(a.budget_limit)}</span>
+                    </div>
+                  </>
+                ) : (
+                  // No ceiling/progress bar for a human_session agent — the
+                  // Agent table's budget_limit is a schema artifact (one
+                  // shared table for both agent types), not a real policy: a
+                  // human confirms every purchase themselves, so a merchant-
+                  // imposed spending ceiling has no governance function here.
+                  <div className="budget-numbers">
+                    <span>{formatMoney(a.spent_so_far)} spent</span>
+                  </div>
+                )}
                 <dl className="agent-stats">
                   <dt>Total orders</dt>
                   <dd>{a.total_orders}</dd>
