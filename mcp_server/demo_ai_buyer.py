@@ -52,7 +52,13 @@ the one the remote server actually charges against.
 Run:
     python mcp_server/demo_ai_buyer.py                       # local subprocess (unchanged default)
     python mcp_server/demo_ai_buyer.py --server-url https://agentic-commerce-mcp-okgk.onrender.com
+    python mcp_server/demo_ai_buyer.py --server-url https://agentic-commerce-mcp-okgk.onrender.com/mcp
     MCP_SERVER_URL=https://agentic-commerce-mcp-okgk.onrender.com python mcp_server/demo_ai_buyer.py
+
+--server-url/MCP_SERVER_URL accept either the bare host or the full /mcp
+endpoint URL — a trailing /mcp is detected and stripped before /mcp is
+appended, rather than doubling it into the invalid ".../mcp/mcp" (see
+_mcp_and_merchant_urls below).
 """
 
 import argparse
@@ -242,14 +248,29 @@ async def scenario_c_compare_and_buy(session: ClientSession, merchant_api: str) 
     )
 
 
+def _mcp_and_merchant_urls(server_url: str) -> tuple[str, str]:
+    """
+    --server-url's documented convention is the bare base URL (no /mcp) —
+    but the real deployed MCP endpoint people actually have on hand/copy
+    around (e.g. DEPLOY.md Part 6, or a real MCP client's own config) is
+    always the full ".../mcp" URL, so passing that here is an easy,
+    already-observed-in-practice mistake. Bug fixed here: blindly
+    appending "/mcp" to that produces the doubled, invalid ".../mcp/mcp"
+    and the connection fails outright. Detect and strip a trailing /mcp
+    first so either form works.
+    """
+    base = server_url.rstrip("/")
+    if base.endswith("/mcp"):
+        base = base[: -len("/mcp")]
+    return f"{base}/mcp", f"{base}/merchant"
+
+
 async def main_async(server_url: str | None) -> None:
     reset_agent_spend()
 
     server_proc = None
     if server_url:
-        base = server_url.rstrip("/")
-        url = f"{base}/mcp"
-        merchant_api = f"{base}/merchant"
+        url, merchant_api = _mcp_and_merchant_urls(server_url)
         print(f"Connecting to remote MCP server (no subprocess spawned): {url}")
     else:
         url = LOCAL_URL
@@ -291,9 +312,11 @@ def parse_args() -> argparse.Namespace:
         "--server-url",
         default=os.environ.get("MCP_SERVER_URL"),
         help=(
-            "Base URL of an already-running MCP server, e.g. "
-            "https://agentic-commerce-mcp-okgk.onrender.com — connects directly instead of "
-            "spawning a local subprocess. Falls back to the MCP_SERVER_URL env var, then to "
+            "Base URL of an already-running MCP server — connects directly instead of spawning "
+            "a local subprocess. Accepts either the bare host, e.g. "
+            "https://agentic-commerce-mcp-okgk.onrender.com, OR the full /mcp endpoint URL, e.g. "
+            "https://agentic-commerce-mcp-okgk.onrender.com/mcp (either form works; a trailing "
+            "/mcp is detected and not doubled). Falls back to the MCP_SERVER_URL env var, then to "
             "spawning 'python -m mcp_server.server --http --port 8765' locally if neither is set."
         ),
     )

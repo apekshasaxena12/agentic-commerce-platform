@@ -132,7 +132,11 @@ Vercel URL / Render URLs instead of localhost:
 - (b) AI agent auto-approve — an MCP client pointed at
   `https://agentic-commerce-mcp.onrender.com/mcp`, `checkout()` a
   under-threshold product (e.g. Compression Running Tights, ₹1599) →
-  `"completed"`.
+  `"completed"`. `mcp_server/demo_ai_buyer.py --server-url
+  https://agentic-commerce-mcp-okgk.onrender.com` (base host, or the full
+  `/mcp` URL above — both are accepted, see that file's module docstring)
+  runs this scenario for real against the live service, alongside (c) and
+  compare_and_buy.
 - (c) AI agent needs approval — `checkout()` an over-threshold product
   (e.g. Windproof Running Jacket, ₹3499) → `"pending_approval"`; approve it
   from `<vercel-url>/merchant`'s Pending Approvals tab; confirm the order
