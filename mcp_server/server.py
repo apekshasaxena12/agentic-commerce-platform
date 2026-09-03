@@ -76,7 +76,7 @@ from db.approvals import get_approval_request, list_pending_approvals_for_mercha
 from db.audit import get_full_audit_trail, get_incident_summary, log_audit_entry
 from db.merchants import get_merchant_by_email
 from db.orders import get_order
-from db.products import adjust_product_stock, list_products_for_merchant
+from db.products import adjust_product_stock, get_ai_commerce_score, list_products_for_merchant
 from mcp_server.merchant_auth import (
     COOKIE_NAME,
     TOKEN_TTL_SECONDS,
@@ -481,6 +481,11 @@ async def get_agents(current: dict = Depends(get_current_merchant)) -> list[dict
 @merchant_router.get("/products")
 async def get_products(current: dict = Depends(get_current_merchant)) -> list[dict]:
     return await asyncio.to_thread(list_products_for_merchant, current["id"])
+
+
+@merchant_router.get("/ai-commerce-score")
+async def get_ai_commerce_score_route(current: dict = Depends(get_current_merchant)) -> dict:
+    return await asyncio.to_thread(get_ai_commerce_score, current["id"])
 
 
 @merchant_router.post("/products/{product_id}/stock")

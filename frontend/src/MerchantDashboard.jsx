@@ -363,6 +363,71 @@ function IncidentCenter() {
   );
 }
 
+// Day 16: own tab, placed next to Incident Center — both are "system
+// health" style summaries (as opposed to Stock/Approvals/Audit's
+// day-to-day operational views), so grouping them keeps the nav
+// legible rather than burying this atop an unrelated tab.
+function AICommerceScore() {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  async function refresh() {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/ai-commerce-score`, { credentials: "include" });
+      if (!res.ok) throw new Error(await describeError(res));
+      setData(await res.json());
+    } catch (err) {
+      setError(err.message || "Could not reach the merchant API");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    refresh();
+  }, []);
+
+  return (
+    <section className="panel">
+      <div className="panel-header">
+        <h2>AI Commerce Score</h2>
+        <button className="refresh" onClick={refresh}>
+          Refresh
+        </button>
+      </div>
+      <p className="muted small">
+        Computed from your own catalog, policy, and order data — every number below is a real count, not an estimate.
+      </p>
+      {error && <div className="banner-error">{error}</div>}
+      {loading && <p className="muted">Loading…</p>}
+      {data && (
+        <>
+          <div className="score-overall">
+            <div className="score-overall-value">{data.overall_score}</div>
+            <div className="score-overall-label">
+              out of 100 — unweighted mean of the {data.dimensions.length} dimensions below
+            </div>
+          </div>
+          <div className="score-dimensions">
+            {data.dimensions.map((d) => (
+              <div key={d.key} className="score-dimension">
+                <div className="score-dimension-head">
+                  <span>{d.label}</span>
+                  <span className="score-dimension-value">{d.score == null ? "—" : `${d.score}%`}</span>
+                </div>
+                <div className="muted small">{d.detail}</div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
 const STEP_ORDER = [
   "intent",
   "retrieve",
@@ -629,6 +694,9 @@ export default function MerchantDashboard() {
         <button className={tab === "incidents" ? "active" : ""} onClick={() => setTab("incidents")}>
           Incident Center
         </button>
+        <button className={tab === "score" ? "active" : ""} onClick={() => setTab("score")}>
+          AI Commerce Score
+        </button>
         <button className={tab === "agents" ? "active" : ""} onClick={() => setTab("agents")}>
           Agents
         </button>
@@ -639,6 +707,7 @@ export default function MerchantDashboard() {
         {tab === "approvals" && <PendingApprovals />}
         {tab === "audit" && <AuditTrail />}
         {tab === "incidents" && <IncidentCenter />}
+        {tab === "score" && <AICommerceScore />}
         {tab === "agents" && <AgentOverview />}
       </main>
     </div>

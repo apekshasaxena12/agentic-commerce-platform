@@ -429,6 +429,49 @@
   font-weight: 600;
 }
 
+.score-overall {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  margin-bottom: 1.25rem;
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid var(--line);
+}
+
+.score-overall-value {
+  font-family: var(--font-mono);
+  font-size: 2.5rem;
+  font-weight: 700;
+}
+
+.score-overall-label {
+  font-size: 0.82rem;
+  color: var(--ink-soft);
+}
+
+.score-dimensions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.score-dimension {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0.75rem 1rem;
+}
+
+.score-dimension-head {
+  display: flex;
+  justify-content: space-between;
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
+.score-dimension-value {
+  font-family: var(--font-mono);
+}
+
 .step-chip::before {
   content: "";
   width: 0.4rem;
