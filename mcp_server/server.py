@@ -67,6 +67,7 @@ import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Response
 from fastapi.middleware.cors import CORSMiddleware
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from pydantic import BaseModel
 
 from catalog.retrieval import get_product_detail, search_products
@@ -89,7 +90,30 @@ AI_AGENT_ID = 6  # seeded ai_agent "Shopping Assistant Agent"; hardcoded, no
 # auth this session — see module docstring. Verify with:
 #   SELECT id FROM agent WHERE name = 'Shopping Assistant Agent';
 
-mcp = FastMCP("AgenticCommerceAIBuyer", port=8765)
+# Day 14: FastMCP auto-enables Host/Origin allowlisting (DNS-rebinding
+# protection) whenever it's constructed without an explicit host= (default
+# "127.0.0.1"), and its default allowed_hosts is localhost-only. That
+# silently 421s every real inbound request once deployed — Host:
+# agentic-commerce-mcp-<...>.onrender.com is never in that list — which is
+# invisible until a real external client connects (verified live: every
+# request to the deployed /mcp endpoint returned 421 "Invalid Host header"
+# before this fix). Keep the protection on, but extend its allowlist with
+# the deployed hostname(s) via MCP_ALLOWED_HOSTS (comma-separated, e.g.
+# "agentic-commerce-mcp-okgk.onrender.com" — no scheme, no port) rather
+# than disabling it outright.
+_ALLOWED_HOSTS = ["127.0.0.1:*", "localhost:*", "[::1]:*"] + [
+    h.strip() for h in os.environ.get("MCP_ALLOWED_HOSTS", "").split(",") if h.strip()
+]
+
+mcp = FastMCP(
+    "AgenticCommerceAIBuyer",
+    port=8765,
+    transport_security=TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=_ALLOWED_HOSTS,
+        allowed_origins=["http://127.0.0.1:*", "http://localhost:*", "http://[::1]:*"],
+    ),
+)
 
 
 def _synthetic_captured_webhook(razorpay_order_id: str, amount: Optional[float]) -> dict:

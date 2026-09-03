@@ -64,6 +64,16 @@ dashboard (Environment tab) — **not** committed anywhere:
   Render service, and every `/merchant/*` request 401s post-login. Leave
   unset locally — that combination requires https, which
   `localhost` doesn't have. See `mcp_server/server.py`'s `IS_PRODUCTION`.
+- `MCP_ALLOWED_HOSTS` — **required on `agentic-commerce-mcp`
+  specifically** (Day 14 addition, found while running
+  `mcp_server/demo_ai_buyer.py --server-url` against this service for the
+  first time: every request to `/mcp` came back `421 Invalid Host
+  header`). FastMCP's built-in DNS-rebinding protection only allowlists
+  localhost Host headers by default; set this to the service's own public
+  hostname, comma-separated if there's more than one, no scheme/port —
+  e.g. `agentic-commerce-mcp-okgk.onrender.com`. Leave unset locally (the
+  built-in localhost defaults already cover it). See
+  `mcp_server/server.py`'s `_ALLOWED_HOSTS`.
 
 Render sets `$PORT` itself; both services already bind to it (see
 `Dockerfile`'s `CMD` and `mcp_server/server.py::main`'s `--http` path).

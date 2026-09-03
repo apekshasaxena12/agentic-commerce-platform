@@ -28,15 +28,29 @@ Windproof Running Jacket @ 3499, over threshold) rather than picking new
 ones blind.
 
 Requires DATABASE_URL / GROQ_API_KEY / RAZORPAY_* to be reachable from
-wherever this runs (see .env) — this script spawns the real MCP server as
-a subprocess, which makes real DB/Groq/Razorpay calls exactly like Front
-Door 1 does.
+wherever this runs (see .env) — by default this script spawns the real MCP
+server as a local subprocess, which makes real DB/Groq/Razorpay calls
+exactly like Front Door 1 does.
 
-Run: python mcp_server/demo_ai_buyer.py
+Day 14: can also run against an already-running server instead of
+spawning one — e.g. the deployed Render service — via --server-url or the
+MCP_SERVER_URL env var (see main_async/parse_args below). DATABASE_URL is
+still required either way: reset_agent_spend() always talks to the DB
+directly, and against the deployed server that DATABASE_URL must be the
+same Supabase instance Render's agentic-commerce-mcp service uses (see
+DEPLOY.md) — otherwise this script would zero a different agent row than
+the one the remote server actually charges against.
+
+Run:
+    python mcp_server/demo_ai_buyer.py                       # local subprocess (unchanged default)
+    python mcp_server/demo_ai_buyer.py --server-url https://agentic-commerce-mcp-okgk.onrender.com
+    MCP_SERVER_URL=https://agentic-commerce-mcp-okgk.onrender.com python mcp_server/demo_ai_buyer.py
 """
 
+import argparse
 import asyncio
 import json
+import os
 import subprocess
 import sys
 import time
@@ -53,8 +67,8 @@ sys.path.insert(0, str(CODE_DIR))
 from db.connection import get_database_url  # noqa: E402
 
 PORT = 8765
-URL = f"http://127.0.0.1:{PORT}/mcp"
-MERCHANT_API = f"http://127.0.0.1:{PORT}/merchant"
+LOCAL_URL = f"http://127.0.0.1:{PORT}/mcp"
+LOCAL_MERCHANT_API = f"http://127.0.0.1:{PORT}/merchant"
 
 AI_AGENT_ID = 6  # "Shopping Assistant Agent" — see mcp_server/server.py's AI_AGENT_ID note
 
@@ -106,19 +120,19 @@ async def call(session: ClientSession, name: str, arguments: dict, log: bool = T
     return parsed
 
 
-async def wait_for_server_ready(timeout_s: float = 20.0) -> None:
+async def wait_for_server_ready(url: str, timeout_s: float = 20.0) -> None:
     deadline = time.monotonic() + timeout_s
     last_exc = None
     while time.monotonic() < deadline:
         try:
-            async with streamablehttp_client(URL) as (read_stream, write_stream, _):
+            async with streamablehttp_client(url) as (read_stream, write_stream, _):
                 async with ClientSession(read_stream, write_stream) as session:
                     await session.initialize()
                     return
         except Exception as exc:  # server subprocess still starting up
             last_exc = exc
             await asyncio.sleep(0.4)
-    raise RuntimeError(f"MCP server never became ready on {URL}: {last_exc}")
+    raise RuntimeError(f"MCP server never became ready on {url}: {last_exc}")
 
 
 async def scenario_a_under_threshold(session: ClientSession) -> None:
@@ -136,7 +150,7 @@ async def scenario_a_under_threshold(session: ClientSession) -> None:
     print("\nCONFIRMED: completed with zero human/merchant involvement at any point.")
 
 
-async def scenario_b_over_threshold(session: ClientSession) -> None:
+async def scenario_b_over_threshold(session: ClientSession, merchant_api: str) -> None:
     print("\n" + "=" * 70)
     print(f"SCENARIO (b): AI buyer checks out '{OVER_THRESHOLD_QUERY}' (over approval_required_above)")
     print("=" * 70)
@@ -165,7 +179,7 @@ async def scenario_b_over_threshold(session: ClientSession) -> None:
     # Generous timeout: resolving an approval synchronously drives the rest
     # of the pipeline (a real Razorpay order-create call, then the
     # synthetic-webhook resume through verification), not just a DB write.
-    async with httpx.AsyncClient(base_url=MERCHANT_API, timeout=30.0) as http:
+    async with httpx.AsyncClient(base_url=merchant_api, timeout=30.0) as http:
         login = await http.post("/login", json={"email": MERCHANT_EMAIL, "password": MERCHANT_PASSWORD})
         login.raise_for_status()
         resolve = await http.post(f"/resolve-approval/{approval_id}", json={"approved": True})
@@ -179,40 +193,66 @@ async def scenario_b_over_threshold(session: ClientSession) -> None:
     print("\nCONFIRMED: merchant approval resolved the pause -> check_order_status agrees -> completed.")
 
 
-async def main_async() -> None:
+async def main_async(server_url: str | None) -> None:
     reset_agent_spend()
 
-    print(f"Starting MCP server subprocess: python -m mcp_server.server --http --port {PORT}")
-    server_proc = subprocess.Popen(
-        [sys.executable, "-m", "mcp_server.server", "--http", "--port", str(PORT)],
-        cwd=str(CODE_DIR),
-    )
+    server_proc = None
+    if server_url:
+        base = server_url.rstrip("/")
+        url = f"{base}/mcp"
+        merchant_api = f"{base}/merchant"
+        print(f"Connecting to remote MCP server (no subprocess spawned): {url}")
+    else:
+        url = LOCAL_URL
+        merchant_api = LOCAL_MERCHANT_API
+        print(f"Starting MCP server subprocess: python -m mcp_server.server --http --port {PORT}")
+        server_proc = subprocess.Popen(
+            [sys.executable, "-m", "mcp_server.server", "--http", "--port", str(PORT)],
+            cwd=str(CODE_DIR),
+        )
     try:
-        await wait_for_server_ready()
+        await wait_for_server_ready(url)
         print("MCP server is up; connecting a real MCP client over streamable-http...")
 
-        async with streamablehttp_client(URL) as (read_stream, write_stream, _):
+        async with streamablehttp_client(url) as (read_stream, write_stream, _):
             async with ClientSession(read_stream, write_stream) as session:
                 await session.initialize()
                 tools = await session.list_tools()
                 print(f"Server exposes tools: {[t.name for t in tools.tools]}")
 
                 await scenario_a_under_threshold(session)
-                await scenario_b_over_threshold(session)
+                await scenario_b_over_threshold(session, merchant_api)
 
         print("\n" + "=" * 70)
         print("ALL SCENARIOS PASSED — real MCP server/client round trip, real pipeline, real gate.")
         print("=" * 70)
     finally:
-        server_proc.terminate()
-        try:
-            server_proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            server_proc.kill()
+        if server_proc is not None:
+            server_proc.terminate()
+            try:
+                server_proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                server_proc.kill()
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument(
+        "--server-url",
+        default=os.environ.get("MCP_SERVER_URL"),
+        help=(
+            "Base URL of an already-running MCP server, e.g. "
+            "https://agentic-commerce-mcp-okgk.onrender.com — connects directly instead of "
+            "spawning a local subprocess. Falls back to the MCP_SERVER_URL env var, then to "
+            "spawning 'python -m mcp_server.server --http --port 8765' locally if neither is set."
+        ),
+    )
+    return parser.parse_args()
 
 
 def main() -> None:
-    asyncio.run(main_async())
+    args = parse_args()
+    asyncio.run(main_async(args.server_url))
 
 
 if __name__ == "__main__":
