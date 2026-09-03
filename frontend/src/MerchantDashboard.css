@@ -144,6 +144,11 @@
   margin: 0;
 }
 
+.panel-header-actions {
+  display: flex;
+  gap: 0.5rem;
+}
+
 .refresh {
   border: 1px solid var(--line);
   background: var(--paper-raised);

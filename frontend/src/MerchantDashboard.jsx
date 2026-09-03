@@ -298,6 +298,37 @@ const STEP_ORDER = [
   "verification",
 ];
 
+// Day 15: one row per exported audit_log_entry, columns matching the
+// on-screen table (order, agent, step, time, output, reasoning) — takes
+// the already filtered+sorted rows, so the export always matches what's
+// currently on screen rather than the full unfiltered dataset.
+function exportAuditTrailCsv(rows) {
+  function csvField(value) {
+    const s = value == null ? "" : String(value);
+    return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  }
+
+  const header = ["Order", "Agent", "Step", "Time", "Output", "Reasoning"];
+  const lines = [header, ...rows.map((r) => [
+    r.order_id,
+    r.agent_name,
+    r.step,
+    new Date(r.timestamp).toLocaleString(),
+    r.output_summary,
+    r.reasoning_text,
+  ])].map((line) => line.map(csvField).join(","));
+
+  const blob = new Blob([lines.join("\r\n")], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `audit-trail-${new Date().toISOString().replace(/[:.]/g, "-")}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
 function AuditTrail() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -305,7 +336,11 @@ function AuditTrail() {
   const [orderFilter, setOrderFilter] = useState("all");
   const [agentFilter, setAgentFilter] = useState("all");
   const [stepFilter, setStepFilter] = useState("all");
-  const [sortBy, setSortBy] = useState("order_id");
+  // Default: most-recent-first. "Order"/"Agent"/"Step" stay as they were;
+  // rather than redefining what "Order" sorts by (confusing — it should
+  // keep meaning order id), default to the existing "Time" option instead
+  // and make that comparator descending.
+  const [sortBy, setSortBy] = useState("timestamp");
 
   async function refresh() {
     setLoading(true);
@@ -354,7 +389,7 @@ function AuditTrail() {
         (a, b) => STEP_ORDER.indexOf(a.step) - STEP_ORDER.indexOf(b.step) || a.order_id - b.order_id
       );
     } else if (sortBy === "timestamp") {
-      out = [...out].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+      out = [...out].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp) || b.id - a.id);
     }
     return out;
   }, [rows, orderFilter, agentFilter, stepFilter, sortBy]);
@@ -363,9 +398,14 @@ function AuditTrail() {
     <section className="panel">
       <div className="panel-header">
         <h2>Full audit trail — your orders</h2>
-        <button className="refresh" onClick={refresh}>
-          Refresh
-        </button>
+        <div className="panel-header-actions">
+          <button className="refresh" onClick={() => exportAuditTrailCsv(filtered)} disabled={filtered.length === 0}>
+            Export CSV
+          </button>
+          <button className="refresh" onClick={refresh}>
+            Refresh
+          </button>
+        </div>
       </div>
 
       <div className="filter-row">
