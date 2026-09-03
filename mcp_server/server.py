@@ -73,7 +73,7 @@ from pydantic import BaseModel
 from catalog.retrieval import get_product_detail, search_products
 from db.agents import get_agent, list_agents
 from db.approvals import get_approval_request, list_pending_approvals_for_merchant
-from db.audit import get_full_audit_trail, get_incident_summary
+from db.audit import get_full_audit_trail, get_incident_summary, log_audit_entry
 from db.merchants import get_merchant_by_email
 from db.orders import get_order
 from db.products import adjust_product_stock, list_products_for_merchant
@@ -291,6 +291,96 @@ async def checkout(product_id: int, quantity: int = 1) -> dict:
     result = await asyncio.to_thread(run_pipeline, initial_state, thread_id)
     order_id = result.get("order_id")
     return await _advance_and_summarize(thread_id, order_id, result)
+
+
+@mcp.tool()
+async def compare_and_buy(query: str, max_price: Optional[float] = None) -> dict:
+    """
+    Cross-merchant compare-then-buy: searches every merchant's catalog for
+    `query` (search_products already spans all merchants when no
+    merchant_id filter is passed — see catalog/retrieval.py), picks one
+    candidate by a simple, explainable rule, then buys it through the
+    EXISTING checkout() tool above (called directly, in-process — the
+    exact same run_pipeline() call checkout() itself makes; no
+    reimplementation, no pipeline/policy changes here).
+
+    Ranking rule (no new scoring algorithm — reuses search_products' own
+    blended keyword+semantic `score`):
+      - max_price given: cheapest candidate at/under max_price, ties broken
+        by higher `score`.
+      - max_price omitted: highest `score` among all candidates.
+
+    The candidates considered and the reason for the pick are both
+    returned AND logged as their own 'intent' audit_log_entry (order_id
+    still None at this point — same pre-order pattern pure-browsing runs
+    already use, see migration 0003) before checkout() runs, so the
+    comparison's reasoning is visible in the merchant dashboard's audit
+    trail even though it happens before any order exists.
+    """
+    filters: dict[str, Any] = {"in_stock_only": True}
+    if max_price is not None:
+        filters["max_price"] = Decimal(str(max_price))
+
+    candidates = await asyncio.to_thread(search_products, query, filters, 10)
+
+    if not candidates:
+        reason = "no in-stock products matched this query" + (
+            f" at or under ₹{max_price:g}" if max_price is not None else ""
+        )
+        await asyncio.to_thread(
+            log_audit_entry,
+            None,
+            "intent",
+            f"compare_and_buy query={query!r} max_price={max_price}",
+            "no candidates found",
+            reason,
+        )
+        return {"outcome": "no_candidates", "query": query, "max_price": max_price, "candidates_considered": [], "reason": reason}
+
+    if max_price is not None:
+        winner = min(candidates, key=lambda p: (p.price, -p.score))
+        reason = f"cheapest match at or under ₹{max_price:g}: ₹{winner.price} at {winner.merchant_name}"
+    else:
+        winner = max(candidates, key=lambda p: p.score)
+        reason = f"highest relevance score ({winner.score:.4f}) among {len(candidates)} candidates across all merchants"
+
+    candidates_considered = [
+        {
+            "product_id": p.id,
+            "name": p.name,
+            "merchant": p.merchant_name,
+            "price": float(p.price),
+            "score": round(p.score, 4),
+        }
+        for p in candidates
+    ]
+
+    await asyncio.to_thread(
+        log_audit_entry,
+        None,
+        "intent",
+        f"compare_and_buy query={query!r} max_price={max_price}",
+        f"selected product_id={winner.id} {winner.name!r} @ {winner.merchant_name} (₹{winner.price})",
+        f"{reason}. Candidates considered: "
+        + "; ".join(
+            f"#{c['product_id']} {c['name']!r} ({c['merchant']}) ₹{c['price']} score={c['score']}"
+            for c in candidates_considered
+        ),
+    )
+
+    checkout_result = await checkout(product_id=winner.id, quantity=1)
+
+    return {
+        **checkout_result,
+        "candidates_considered": candidates_considered,
+        "selected": {
+            "product_id": winner.id,
+            "name": winner.name,
+            "merchant": winner.merchant_name,
+            "price": float(winner.price),
+        },
+        "selection_reason": reason,
+    }
 
 
 @mcp.tool()

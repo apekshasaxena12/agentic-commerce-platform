@@ -22,6 +22,14 @@ Two scenarios against the real seeded catalog/DB:
       ClientSession) has no tool that can do this — see
       mcp_server/server.py's module docstring.
 
+  (c) Day 15: compare_and_buy("something for cold weather running",
+      max_price=4000) — the new cross-merchant compare-then-buy tool.
+      search_products already spans every merchant when no merchant_id
+      filter is given, so this ranks candidates across BOTH seeded
+      merchants (Shopfront Running Co. and Roast & Ritual), picks one by
+      the tool's stated explainable rule, then runs the exact same
+      checkout() path scenario (a)/(b) already exercise for the winner.
+
 Reuses the exact two products pipeline/demo_run.py already proved trigger
 each side of the gate (Compression Running Tights @ 1599, under threshold;
 Windproof Running Jacket @ 3499, over threshold) rather than picking new
@@ -193,6 +201,47 @@ async def scenario_b_over_threshold(session: ClientSession, merchant_api: str) -
     print("\nCONFIRMED: merchant approval resolved the pause -> check_order_status agrees -> completed.")
 
 
+async def scenario_c_compare_and_buy(session: ClientSession, merchant_api: str) -> None:
+    print("\n" + "=" * 70)
+    print("SCENARIO (c): AI buyer compare_and_buy('something for cold weather running', max_price=4000)")
+    print("=" * 70)
+
+    reset_agent_spend()  # isolate this scenario's budget, same as scenario (b)
+
+    outcome = await call(
+        session, "compare_and_buy", {"query": "something for cold weather running", "max_price": 4000}
+    )
+    assert outcome["outcome"] in ("completed", "pending_approval"), f"unexpected outcome: {outcome}"
+
+    print(f"\n{len(outcome['candidates_considered'])} candidate(s) considered across all merchants:")
+    for c in outcome["candidates_considered"]:
+        print(f"  #{c['product_id']} {c['name']!r} ({c['merchant']}) ₹{c['price']} score={c['score']}")
+    print(f"\nSelected: #{outcome['selected']['product_id']} {outcome['selected']['name']!r} "
+          f"({outcome['selected']['merchant']}) ₹{outcome['selected']['price']}")
+    print(f"Reason: {outcome['selection_reason']}")
+
+    order_id = outcome["order_id"]
+    if outcome["outcome"] == "pending_approval":
+        approval_id = outcome["approval_request_id"]
+        print(f"\nover threshold -> pending_approval (order #{order_id}, approval_request #{approval_id}); "
+              "resolving via the merchant dashboard, same as scenario (b).")
+        async with httpx.AsyncClient(base_url=merchant_api, timeout=30.0) as http:
+            login = await http.post("/login", json={"email": MERCHANT_EMAIL, "password": MERCHANT_PASSWORD})
+            login.raise_for_status()
+            resolve = await http.post(f"/resolve-approval/{approval_id}", json={"approved": True})
+            resolve.raise_for_status()
+            resolution = resolve.json()
+        print(f"POST /merchant/resolve-approval/{approval_id} -> {resolution}")
+        assert resolution["outcome"] == "completed", f"expected completed after merchant approval, got {resolution}"
+
+    poll = await call(session, "check_order_status", {"order_id": order_id})
+    assert poll["status"] == "completed", f"expected completed, got {poll}"
+    print(
+        "\nCONFIRMED: compare_and_buy's winning product completed through the exact same pipeline "
+        "(policy_check -> authorization -> real Razorpay order -> verification) as a direct checkout() call."
+    )
+
+
 async def main_async(server_url: str | None) -> None:
     reset_agent_spend()
 
@@ -222,6 +271,7 @@ async def main_async(server_url: str | None) -> None:
 
                 await scenario_a_under_threshold(session)
                 await scenario_b_over_threshold(session, merchant_api)
+                await scenario_c_compare_and_buy(session, merchant_api)
 
         print("\n" + "=" * 70)
         print("ALL SCENARIOS PASSED — real MCP server/client round trip, real pipeline, real gate.")
