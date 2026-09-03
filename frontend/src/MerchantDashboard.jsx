@@ -279,9 +279,84 @@ function AgentOverview() {
                   <span>{formatMoney(a.spent_so_far)} spent</span>
                   <span className="muted">of {formatMoney(a.budget_limit)}</span>
                 </div>
+                <dl className="agent-stats">
+                  <dt>Total orders</dt>
+                  <dd>{a.total_orders}</dd>
+                  <dt>Successful</dt>
+                  <dd>
+                    {a.successful_orders}
+                    {a.success_rate != null && <span className="muted"> ({a.success_rate}%)</span>}
+                  </dd>
+                  <dt>Policy blocks</dt>
+                  <dd>{a.policy_block_count}</dd>
+                  <dt>Payment failures</dt>
+                  <dd>{a.payment_failure_count}</dd>
+                </dl>
               </div>
             );
           })}
+        </div>
+      )}
+    </section>
+  );
+}
+
+// Day 15: labels for the six real, computed-not-invented counts
+// GET /merchant/incident-summary returns (see db/audit.py's
+// get_incident_summary for exactly how each one is derived).
+const INCIDENT_STATS = [
+  { key: "total_orders", label: "Total orders" },
+  { key: "auto_approved", label: "Auto-approved (no pause)" },
+  { key: "merchant_approvals", label: "Merchant approvals" },
+  { key: "policy_blocks", label: "Policy blocks" },
+  { key: "payment_failures", label: "Payment failures" },
+  { key: "unhandled_crashes", label: "Unhandled crashes" },
+];
+
+function IncidentCenter() {
+  const [summary, setSummary] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  async function refresh() {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch(`${API_BASE}/incident-summary`, { credentials: "include" });
+      if (!res.ok) throw new Error(await describeError(res));
+      setSummary(await res.json());
+    } catch (err) {
+      setError(err.message || "Could not reach the merchant API");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    refresh();
+  }, []);
+
+  return (
+    <section className="panel">
+      <div className="panel-header">
+        <h2>Incident Center — your orders</h2>
+        <button className="refresh" onClick={refresh}>
+          Refresh
+        </button>
+      </div>
+      <p className="muted small">
+        Real counts computed from your orders and their audit trail — nothing here is estimated.
+      </p>
+      {error && <div className="banner-error">{error}</div>}
+      {loading && <p className="muted">Loading…</p>}
+      {summary && (
+        <div className="incident-stats">
+          {INCIDENT_STATS.map(({ key, label }) => (
+            <div key={key} className={`incident-stat ${key === "unhandled_crashes" && summary[key] > 0 ? "crash-nonzero" : ""}`}>
+              <div className="incident-stat-value">{summary[key]}</div>
+              <div className="incident-stat-label">{label}</div>
+            </div>
+          ))}
         </div>
       )}
     </section>
@@ -551,6 +626,9 @@ export default function MerchantDashboard() {
         <button className={tab === "audit" ? "active" : ""} onClick={() => setTab("audit")}>
           Audit trail
         </button>
+        <button className={tab === "incidents" ? "active" : ""} onClick={() => setTab("incidents")}>
+          Incident Center
+        </button>
         <button className={tab === "agents" ? "active" : ""} onClick={() => setTab("agents")}>
           Agents
         </button>
@@ -560,6 +638,7 @@ export default function MerchantDashboard() {
         {tab === "stock" && <StockManage />}
         {tab === "approvals" && <PendingApprovals />}
         {tab === "audit" && <AuditTrail />}
+        {tab === "incidents" && <IncidentCenter />}
         {tab === "agents" && <AgentOverview />}
       </main>
     </div>

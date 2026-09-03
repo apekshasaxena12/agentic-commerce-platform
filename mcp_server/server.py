@@ -73,7 +73,7 @@ from pydantic import BaseModel
 from catalog.retrieval import get_product_detail, search_products
 from db.agents import get_agent, list_agents
 from db.approvals import get_approval_request, list_pending_approvals_for_merchant
-from db.audit import get_full_audit_trail
+from db.audit import get_full_audit_trail, get_incident_summary
 from db.merchants import get_merchant_by_email
 from db.orders import get_order
 from db.products import adjust_product_stock, list_products_for_merchant
@@ -376,6 +376,11 @@ async def get_me(current: dict = Depends(get_current_merchant)) -> dict:
 @merchant_router.get("/audit-trail")
 async def get_audit_trail_all(current: dict = Depends(get_current_merchant)) -> list[dict]:
     return await asyncio.to_thread(get_full_audit_trail, current["id"])
+
+
+@merchant_router.get("/incident-summary")
+async def get_incident_summary_route(current: dict = Depends(get_current_merchant)) -> dict:
+    return await asyncio.to_thread(get_incident_summary, current["id"])
 
 
 @merchant_router.get("/agents")
