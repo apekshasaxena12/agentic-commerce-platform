@@ -45,6 +45,22 @@ load_dotenv()
 
 HUMAN_AGENT_ID = 5  # seeded human_session agent; hardcoded, no auth this session
 
+MAX_QUANTITY = 100  # Day 18 security hardening — same rationale/limit as
+# mcp_server/server.py's checkout() tool: quantity <=0 previously reached
+# the orders_amount_check DB constraint unvalidated instead of a clean
+# rejection, and no upper bound existed at all.
+
+
+def _invalid_quantity(quantity) -> Optional[str]:
+    """None if `quantity` is a valid positive int <= MAX_QUANTITY, else a
+    ready-to-send rejection message. Shared by both checkout entry points
+    below (single-product and cart) since both accept quantity straight
+    from the client's raw WebSocket JSON, unlike a pydantic-validated
+    HTTP body."""
+    if not isinstance(quantity, int) or isinstance(quantity, bool) or not (0 < quantity <= MAX_QUANTITY):
+        return f"quantity must be a positive integer, at most {MAX_QUANTITY} (got {quantity!r})"
+    return None
+
 RAZORPAY_KEY_ID = os.environ.get("RAZORPAY_KEY_ID")
 RAZORPAY_KEY_SECRET = os.environ.get("RAZORPAY_KEY_SECRET")
 RAZORPAY_WEBHOOK_SECRET = os.environ.get("RAZORPAY_WEBHOOK_SECRET")
@@ -272,6 +288,12 @@ async def _handle_checkout_product(
         await _safe_send(websocket, {"type": "turn_complete"}, thread_id)
         return
 
+    invalid = _invalid_quantity(quantity)
+    if invalid is not None:
+        await _safe_send(websocket, {"type": "error", "message": invalid}, thread_id)
+        await _safe_send(websocket, {"type": "turn_complete"}, thread_id)
+        return
+
     initial_state = {
         "product_id": product_id,
         "quantity": quantity,
@@ -300,6 +322,17 @@ async def _handle_checkout_cart(websocket: WebSocket, thread_id: str, items: lis
         await _safe_send(websocket, {"type": "error", "message": "checkout_cart requires at least one item"}, thread_id)
         await _safe_send(websocket, {"type": "turn_complete"}, thread_id)
         return
+
+    for item in items:
+        invalid = _invalid_quantity(item.get("quantity", 1))
+        if invalid is not None:
+            await _safe_send(
+                websocket,
+                {"type": "error", "message": f"{invalid} (product_id={item.get('product_id')!r})"},
+                thread_id,
+            )
+            await _safe_send(websocket, {"type": "turn_complete"}, thread_id)
+            return
 
     initial_state = {
         "cart_items": items,

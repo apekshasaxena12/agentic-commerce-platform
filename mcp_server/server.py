@@ -90,6 +90,12 @@ AI_AGENT_ID = 6  # seeded ai_agent "Shopping Assistant Agent"; hardcoded, no
 # auth this session — see module docstring. Verify with:
 #   SELECT id FROM agent WHERE name = 'Shopping Assistant Agent';
 
+MAX_QUANTITY = 100  # Day 18 security hardening: quantity <=0 previously
+# reached the orders_amount_check DB constraint unvalidated, leaking a raw
+# Postgres error to the client instead of a clean rejection. No natural
+# upper bound existed either — 100 is a sane per-order ceiling, not a
+# real catalog constraint.
+
 # Day 14: FastMCP auto-enables Host/Origin allowlisting (DNS-rebinding
 # protection) whenever it's constructed without an explicit host= (default
 # "127.0.0.1"), and its default allowed_hosts is localhost-only. That
@@ -266,6 +272,13 @@ async def checkout(product_id: int, quantity: int = 1) -> dict:
     razorpay -> verification). Returns one of two outcomes: "completed", or
     "failed" (with a reason).
     """
+    if not isinstance(quantity, int) or isinstance(quantity, bool) or not (0 < quantity <= MAX_QUANTITY):
+        return {
+            "outcome": "failed",
+            "order_id": None,
+            "reason": f"quantity must be a positive integer, at most {MAX_QUANTITY} (got {quantity!r})",
+        }
+
     product = await asyncio.to_thread(get_product_detail, product_id)
     if product is None:
         return {"outcome": "failed", "order_id": None, "reason": f"product_id {product_id} not found in catalog"}
