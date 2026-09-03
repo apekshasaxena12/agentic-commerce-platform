@@ -16,6 +16,19 @@ function formatMoney(n) {
   return `₹${Number(n).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 }
 
+// Turns a failed response into a real, specific message (e.g. "401: not
+// authenticated") instead of a hardcoded guess — used by every tab below so
+// an auth failure, a 500, or the API being unreachable each read distinctly.
+async function describeError(res) {
+  try {
+    const body = await res.json();
+    if (body && typeof body.detail === "string") return `${res.status}: ${body.detail}`;
+  } catch {
+    // response body wasn't JSON — fall through to the generic message
+  }
+  return `Request failed (${res.status} ${res.statusText})`.trim();
+}
+
 function StockManage() {
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -23,11 +36,20 @@ function StockManage() {
   const [adjusting, setAdjusting] = useState(null);
 
   useEffect(() => {
-    fetch(`${API_BASE}/products`, { credentials: "include" })
-      .then((r) => r.json())
-      .then(setProducts)
-      .catch(() => setError("Could not reach the merchant API — is mcp_server.server --http running on :8765?"))
-      .finally(() => setLoading(false));
+    async function load() {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch(`${API_BASE}/products`, { credentials: "include" });
+        if (!res.ok) throw new Error(await describeError(res));
+        setProducts(await res.json());
+      } catch (err) {
+        setError(err.message || "Could not reach the merchant API");
+      } finally {
+        setLoading(false);
+      }
+    }
+    load();
   }, []);
 
   async function adjust(product_id, delta) {
@@ -57,7 +79,7 @@ function StockManage() {
       </div>
       {error && <div className="banner-error">{error}</div>}
       {loading && <p className="muted">Loading…</p>}
-      {!loading && products.length === 0 && <p className="muted">No products in your catalog.</p>}
+      {!loading && !error && products.length === 0 && <p className="muted">No products in your catalog.</p>}
       {products.length > 0 && (
         <table className="data-table">
           <thead>
@@ -114,10 +136,10 @@ function PendingApprovals() {
     setError(null);
     try {
       const res = await fetch(`${API_BASE}/pending-approvals`, { credentials: "include" });
-      if (!res.ok) throw new Error();
+      if (!res.ok) throw new Error(await describeError(res));
       setApprovals(await res.json());
-    } catch {
-      setError("Could not reach the merchant API — is mcp_server.server --http running on :8765?");
+    } catch (err) {
+      setError(err.message || "Could not reach the merchant API");
     } finally {
       setLoading(false);
     }
@@ -158,7 +180,7 @@ function PendingApprovals() {
       </div>
       {error && <div className="banner-error">{error}</div>}
       {loading && <p className="muted">Loading…</p>}
-      {!loading && approvals.length === 0 && (
+      {!loading && !error && approvals.length === 0 && (
         <p className="muted">No AI agent purchases are awaiting your approval right now.</p>
       )}
       {approvals.length > 0 && (
@@ -208,12 +230,24 @@ function PendingApprovals() {
 
 function AgentOverview() {
   const [agents, setAgents] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
-    fetch(`${API_BASE}/agents`, { credentials: "include" })
-      .then((r) => r.json())
-      .then(setAgents)
-      .catch(() => {});
+    async function load() {
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch(`${API_BASE}/agents`, { credentials: "include" });
+        if (!res.ok) throw new Error(await describeError(res));
+        setAgents(await res.json());
+      } catch (err) {
+        setError(err.message || "Could not reach the merchant API");
+      } finally {
+        setLoading(false);
+      }
+    }
+    load();
   }, []);
 
   return (
@@ -225,26 +259,31 @@ function AgentOverview() {
         Platform-wide — every buyer agent, not scoped to your store. Shown here since agents aren't
         merchant-specific (the same agent can shop at any store); their orders on the tabs above are.
       </p>
-      <div className="agent-cards">
-        {agents.map((a) => {
-          const pct = a.budget_limit > 0 ? Math.min(100, (a.spent_so_far / a.budget_limit) * 100) : 0;
-          return (
-            <div key={a.id} className="agent-card">
-              <div className="agent-card-top">
-                <span className={`agent-badge ${a.type}`}>{a.type === "ai_agent" ? "AI agent" : "Human"}</span>
-                <span className="agent-name">{a.name}</span>
+      {error && <div className="banner-error">{error}</div>}
+      {loading && <p className="muted">Loading…</p>}
+      {!loading && !error && agents.length === 0 && <p className="muted">No agents found.</p>}
+      {agents.length > 0 && (
+        <div className="agent-cards">
+          {agents.map((a) => {
+            const pct = a.budget_limit > 0 ? Math.min(100, (a.spent_so_far / a.budget_limit) * 100) : 0;
+            return (
+              <div key={a.id} className="agent-card">
+                <div className="agent-card-top">
+                  <span className={`agent-badge ${a.type}`}>{a.type === "ai_agent" ? "AI agent" : "Human"}</span>
+                  <span className="agent-name">{a.name}</span>
+                </div>
+                <div className="budget-bar">
+                  <div className={`budget-fill ${a.type}`} style={{ width: `${pct}%` }} />
+                </div>
+                <div className="budget-numbers">
+                  <span>{formatMoney(a.spent_so_far)} spent</span>
+                  <span className="muted">of {formatMoney(a.budget_limit)}</span>
+                </div>
               </div>
-              <div className="budget-bar">
-                <div className={`budget-fill ${a.type}`} style={{ width: `${pct}%` }} />
-              </div>
-              <div className="budget-numbers">
-                <span>{formatMoney(a.spent_so_far)} spent</span>
-                <span className="muted">of {formatMoney(a.budget_limit)}</span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      )}
     </section>
   );
 }
@@ -262,6 +301,7 @@ const STEP_ORDER = [
 function AuditTrail() {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [orderFilter, setOrderFilter] = useState("all");
   const [agentFilter, setAgentFilter] = useState("all");
   const [stepFilter, setStepFilter] = useState("all");
@@ -269,9 +309,13 @@ function AuditTrail() {
 
   async function refresh() {
     setLoading(true);
+    setError(null);
     try {
       const res = await fetch(`${API_BASE}/audit-trail`, { credentials: "include" });
+      if (!res.ok) throw new Error(await describeError(res));
       setRows(await res.json());
+    } catch (err) {
+      setError(err.message || "Could not reach the merchant API");
     } finally {
       setLoading(false);
     }
@@ -369,8 +413,9 @@ function AuditTrail() {
         </label>
       </div>
 
+      {error && <div className="banner-error">{error}</div>}
       {loading && <p className="muted">Loading…</p>}
-      {!loading && filtered.length === 0 && <p className="muted">No audit entries match this filter.</p>}
+      {!loading && !error && filtered.length === 0 && <p className="muted">No audit entries match this filter.</p>}
       {filtered.length > 0 && (
         <div className="audit-trail-scroll">
           <table className="data-table audit-table">

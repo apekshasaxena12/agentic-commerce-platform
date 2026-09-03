@@ -57,6 +57,13 @@ dashboard (Environment tab) — **not** committed anywhere:
   local dev origins if unset, so nothing breaks if you forget it, but the
   deployed frontend's fetch/WebSocket calls will be blocked by CORS until
   it's set correctly)
+- `ENVIRONMENT=production` — **required on `agentic-commerce-mcp`
+  specifically** (Day 14 addition). Switches the merchant session cookie
+  to `SameSite=None; Secure=True`, without which browsers block the
+  cookie on the now cross-site call from the Vercel frontend to this
+  Render service, and every `/merchant/*` request 401s post-login. Leave
+  unset locally — that combination requires https, which
+  `localhost` doesn't have. See `mcp_server/server.py`'s `IS_PRODUCTION`.
 
 Render sets `$PORT` itself; both services already bind to it (see
 `Dockerfile`'s `CMD` and `mcp_server/server.py::main`'s `--http` path).

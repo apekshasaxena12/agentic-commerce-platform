@@ -291,6 +291,18 @@ async def check_order_status(order_id: int) -> dict:
 
 merchant_router = APIRouter()
 
+# Day 14: the deployed frontend (Vercel) and this API (Render) are on
+# different domains, so the session cookie is genuinely cross-site there —
+# SameSite=lax (the previous setting) is blocked by browsers on cross-site
+# requests by design, causing every /merchant/* call to 401 post-login.
+# SameSite=None fixes that, but browsers reject SameSite=None without
+# Secure, and Secure cookies aren't sent over plain http://localhost — so
+# this can't be a single hardcoded value; it must follow which environment
+# is actually running. ENVIRONMENT=production (set on the Render services,
+# see DEPLOY.md) is the explicit switch; unset/anything else keeps local
+# dev on the working lax+non-secure combination.
+IS_PRODUCTION = os.environ.get("ENVIRONMENT", "development").lower() == "production"
+
 
 class LoginBody(BaseModel):
     email: str
@@ -315,8 +327,8 @@ async def post_login(body: LoginBody, response: Response) -> dict:
         key=COOKIE_NAME,
         value=token,
         httponly=True,
-        samesite="lax",
-        secure=False,  # local dev over http; flip to True behind https in prod
+        samesite="none" if IS_PRODUCTION else "lax",
+        secure=IS_PRODUCTION,  # SameSite=None requires Secure; localhost stays http so both stay off there
         max_age=TOKEN_TTL_SECONDS,
     )
     return {"id": merchant["id"], "name": merchant["name"], "email": merchant["email"]}
@@ -324,7 +336,11 @@ async def post_login(body: LoginBody, response: Response) -> dict:
 
 @merchant_router.post("/logout")
 async def post_logout(response: Response) -> dict:
-    response.delete_cookie(key=COOKIE_NAME)
+    response.delete_cookie(
+        key=COOKIE_NAME,
+        samesite="none" if IS_PRODUCTION else "lax",
+        secure=IS_PRODUCTION,
+    )
     return {"ok": True}
 
 
