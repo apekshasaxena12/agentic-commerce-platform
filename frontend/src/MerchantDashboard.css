@@ -286,6 +286,41 @@
   color: var(--paper-raised);
 }
 
+/* Own classes rather than reusing .incident-stats/.incident-stat: those
+   are shared with the Incident Center tab's short integer counts, whose
+   170px minmax floor is too narrow for a currency total like
+   "₹2,95,563.00" (~230px at this font/size — see MerchantDashboard.css
+   history) and doesn't grow to fit it, since an explicit minmax() minimum
+   isn't auto-expanded by content the way "minmax(auto, 1fr)" would be.
+   260px matches .agent-cards' already-proven-sufficient floor below;
+   overflow-wrap is a second line of defense so an even longer number
+   later wraps inside its own card instead of spilling into the next. */
+.agent-totals {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+.agent-total {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 1rem;
+}
+
+.agent-total-value {
+  font-family: var(--font-mono);
+  font-size: 1.7rem;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+
+.agent-total-label {
+  font-size: 0.78rem;
+  color: var(--ink-soft);
+  margin-top: 0.25rem;
+}
+
 .agent-cards {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));

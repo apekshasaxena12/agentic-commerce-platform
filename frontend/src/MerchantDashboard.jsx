@@ -264,18 +264,18 @@ function AgentOverview() {
       {!loading && !error && agents.length === 0 && <p className="muted">No agents found.</p>}
       {agents.length > 0 && (
         <>
-          <div className="incident-stats">
-            <div className="incident-stat">
-              <div className="incident-stat-value">
+          <div className="agent-totals">
+            <div className="agent-total">
+              <div className="agent-total-value">
                 {formatMoney(agents.filter((a) => a.type === "human_session").reduce((sum, a) => sum + a.spent_so_far, 0))}
               </div>
-              <div className="incident-stat-label">Total spent — human</div>
+              <div className="agent-total-label">Total spent — human</div>
             </div>
-            <div className="incident-stat">
-              <div className="incident-stat-value">
+            <div className="agent-total">
+              <div className="agent-total-value">
                 {formatMoney(agents.filter((a) => a.type === "ai_agent").reduce((sum, a) => sum + a.spent_so_far, 0))}
               </div>
-              <div className="incident-stat-label">Total spent — AI agent</div>
+              <div className="agent-total-label">Total spent — AI agent</div>
             </div>
           </div>
           <div className="agent-cards">
