@@ -263,35 +263,37 @@ function AgentOverview() {
       {loading && <p className="muted">Loading…</p>}
       {!loading && !error && agents.length === 0 && <p className="muted">No agents found.</p>}
       {agents.length > 0 && (
-        <div className="agent-cards">
-          {agents.map((a) => {
-            const pct = a.budget_limit > 0 ? Math.min(100, (a.spent_so_far / a.budget_limit) * 100) : 0;
-            return (
+        <>
+          <div className="incident-stats">
+            <div className="incident-stat">
+              <div className="incident-stat-value">
+                {formatMoney(agents.filter((a) => a.type === "human_session").reduce((sum, a) => sum + a.spent_so_far, 0))}
+              </div>
+              <div className="incident-stat-label">Total spent — human</div>
+            </div>
+            <div className="incident-stat">
+              <div className="incident-stat-value">
+                {formatMoney(agents.filter((a) => a.type === "ai_agent").reduce((sum, a) => sum + a.spent_so_far, 0))}
+              </div>
+              <div className="incident-stat-label">Total spent — AI agent</div>
+            </div>
+          </div>
+          <div className="agent-cards">
+            {agents.map((a) => (
               <div key={a.id} className="agent-card">
                 <div className="agent-card-top">
                   <span className={`agent-badge ${a.type}`}>{a.type === "ai_agent" ? "AI agent" : "Human"}</span>
                   <span className="agent-name">{a.name}</span>
                 </div>
-                {a.type === "ai_agent" ? (
-                  <>
-                    <div className="budget-bar">
-                      <div className={`budget-fill ${a.type}`} style={{ width: `${pct}%` }} />
-                    </div>
-                    <div className="budget-numbers">
-                      <span>{formatMoney(a.spent_so_far)} spent</span>
-                      <span className="muted">of {formatMoney(a.budget_limit)}</span>
-                    </div>
-                  </>
-                ) : (
-                  // No ceiling/progress bar for a human_session agent — the
-                  // Agent table's budget_limit is a schema artifact (one
-                  // shared table for both agent types), not a real policy: a
-                  // human confirms every purchase themselves, so a merchant-
-                  // imposed spending ceiling has no governance function here.
-                  <div className="budget-numbers">
-                    <span>{formatMoney(a.spent_so_far)} spent</span>
-                  </div>
-                )}
+                {/* Same layout for both agent types — no budget ceiling shown
+                    for either: budget_limit is a schema artifact (one shared
+                    table for both agent types), not a real policy for
+                    human_session (a human confirms every purchase
+                    themselves), and dropped for ai_agent too for display
+                    consistency. */}
+                <div className="budget-numbers">
+                  <span>{formatMoney(a.spent_so_far)} spent</span>
+                </div>
                 <dl className="agent-stats">
                   <dt>Total orders</dt>
                   <dd>{a.total_orders}</dd>
@@ -306,9 +308,9 @@ function AgentOverview() {
                   <dd>{a.payment_failure_count}</dd>
                 </dl>
               </div>
-            );
-          })}
-        </div>
+            ))}
+          </div>
+        </>
       )}
     </section>
   );
