@@ -75,8 +75,80 @@ take ~30-60s to wake the service up.
 
 ## Running locally
 
-See **[RUNNING.md](RUNNING.md)** for the full setup: `.env` vars, one-time
-DB setup, starting all three processes, and a smoke-check for each piece.
+Three processes, three terminals, all from `Code/` unless noted.
+
+**1. `.env`** (git-ignored) needs:
+
+| Var | Required for |
+|---|---|
+| `DATABASE_URL` | Everything — both backends connect at import time |
+| `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` | Any real checkout (test-mode keys) |
+| `GROQ_API_KEY` | The `intent`/`recommend` pipeline nodes |
+| `RAZORPAY_WEBHOOK_SECRET` | Only the real `/webhooks/razorpay` endpoint |
+| `MERCHANT_SESSION_SECRET` | The merchant dashboard's login (no fallback — required) |
+| `ALLOWED_ORIGINS` | CORS; optional locally, defaults to `localhost:5173` |
+
+**2. One-time DB setup** (usually already done):
+
+```bash
+python -m db.migrate          # applies db/migrations/*.sql, safe to re-run
+python -m db.seed             # product catalog, merchant_policy, the 2 demo agents
+python -m db.embed_products   # embeds every product's semantic_description
+```
+
+The LangGraph checkpointer (`PostgresSaver`) sets itself up automatically
+the moment either backend process starts — no separate step.
+
+**3. Start everything:**
+
+```bash
+# Terminal 1 — Front Door 1: chat + webhook receiver + /ws/chat
+uvicorn server.app:app --reload --port 8000
+
+# Terminal 2 — Front Door 2: MCP tools + merchant dashboard API/WS
+python -m mcp_server.server --http --port 8765
+
+# Terminal 3 — frontend (both pages)
+cd frontend && npm install && npm run dev -- --port 5173
+```
+
+Open `http://localhost:5173/` (shopper chat) and
+`http://localhost:5173/merchant` (merchant dashboard).
+
+**Smoke-check:** `curl -s http://localhost:8765/merchant/agents` should
+404/401 (route exists, needs a merchant session) rather than a connection
+error; either backend reaching "Uvicorn running on..." proves the DB
+connection is live (a bad `DATABASE_URL` crashes the process on import).
+
+## Deployment
+
+Backend on **Render** (one Dockerfile, two services), frontend on
+**Vercel**.
+
+**Render** — both services build from the same root `Dockerfile`, differing
+only in start command:
+
+| Service | Start command | Purpose |
+|---|---|---|
+| `agentic-commerce-backend` | *(Dockerfile default)* | Front Door 1: chat WebSocket + `/webhooks/razorpay` |
+| `agentic-commerce-mcp` | `python -m mcp_server.server --http --port $PORT` | Front Door 2: MCP tools + merchant dashboard API |
+
+Both need `DATABASE_URL`, `RAZORPAY_KEY_ID`/`RAZORPAY_KEY_SECRET`,
+`RAZORPAY_WEBHOOK_SECRET`, `GROQ_API_KEY`, `ALLOWED_ORIGINS` (the deployed
+Vercel URL). `agentic-commerce-mcp` additionally needs
+`MERCHANT_SESSION_SECRET` (merchant login), `ENVIRONMENT=production`
+(cross-site session cookie), and `MCP_ALLOWED_HOSTS` (FastMCP's DNS-rebinding
+protection needs the service's own public hostname allowlisted).
+
+**Vercel** — project root is `frontend/`. Set before build, since Vite
+inlines `VITE_*` vars at build time: `VITE_WS_URL`, `VITE_API_URL` (both
+pointing at the backend service), `VITE_MERCHANT_API_BASE` (pointing at the
+MCP service's `/merchant` path).
+
+**Razorpay webhook** — in the Razorpay dashboard (test mode): Settings →
+Webhooks → Add New Webhook, URL `<backend>/webhooks/razorpay`, secret
+matching `RAZORPAY_WEBHOOK_SECRET`, events `payment.captured` /
+`payment.failed`.
 
 ## What's built
 

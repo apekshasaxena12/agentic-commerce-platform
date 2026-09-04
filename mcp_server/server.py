@@ -426,7 +426,7 @@ merchant_router = APIRouter()
 # Secure, and Secure cookies aren't sent over plain http://localhost — so
 # this can't be a single hardcoded value; it must follow which environment
 # is actually running. ENVIRONMENT=production (set on the Render services,
-# see DEPLOY.md) is the explicit switch; unset/anything else keeps local
+# see README.md's Deployment section) is the explicit switch; unset/anything else keeps local
 # dev on the working lax+non-secure combination.
 IS_PRODUCTION = os.environ.get("ENVIRONMENT", "development").lower() == "production"
 

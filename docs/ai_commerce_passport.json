@@ -1,6 +1,6 @@
 {
   "document": "AI Commerce Passport",
-  "generated_at": "2026-09-02T13:43:24.112247+00:00",
+  "generated_at": "2026-09-04T16:31:25.864917+00:00",
   "merchants": [
     {
       "merchant": {
@@ -25,7 +25,7 @@
       "what_an_ai_agent_may_do": {
         "browse": true,
         "cart": true,
-        "purchase_autonomously_up_to": 2000.0,
+        "purchase_autonomously_up_to": 4000.0,
         "purchase_above_that_requires": "merchant approval (pauses the checkout pipeline until resolved via the merchant dashboard)",
         "max_discount_pct": 15.0,
         "max_autonomous_purchase_amount": 2000.0,

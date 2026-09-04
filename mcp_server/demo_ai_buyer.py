@@ -232,8 +232,8 @@ def _mcp_and_merchant_urls(server_url: str) -> tuple[str, str]:
     """
     --server-url's documented convention is the bare base URL (no /mcp) —
     but the real deployed MCP endpoint people actually have on hand/copy
-    around (e.g. DEPLOY.md Part 6, or a real MCP client's own config) is
-    always the full ".../mcp" URL, so passing that here is an easy,
+    around (e.g. README.md's Deployment section, or a real MCP client's own
+    config) is always the full ".../mcp" URL, so passing that here is an easy,
     already-observed-in-practice mistake. Bug fixed here: blindly
     appending "/mcp" to that produces the doubled, invalid ".../mcp/mcp"
     and the connection fails outright. Detect and strip a trailing /mcp

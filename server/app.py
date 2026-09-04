@@ -379,8 +379,9 @@ def _build_webhook_from_checkout_outcome(data: dict) -> dict:
     """
     No public tunnel exists yet, so Razorpay's real webhook POST can't
     reach us this session (the standalone /webhooks/razorpay endpoint and
-    its signature verification are proven separately, see
-    server/manual_test.py). This instead wraps GENUINE data from Checkout.js's
+    its signature verification are real code, exercised for real once a
+    webhook is registered against a deployed URL — see README.md's
+    Deployment section). This instead wraps GENUINE data from Checkout.js's
     own client-side `payment.failed` / success handler — real error
     code/description/source/step/reason from Razorpay's servers for an
     actual triggered decline, not synthetic — into the same envelope shape
