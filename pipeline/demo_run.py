@@ -60,16 +60,6 @@ def get_agent_spent(agent_id: int) -> Decimal:
         ).fetchone()[0]
 
 
-def reset_agent_spend() -> None:
-    """Demo hygiene: zero out spent_so_far on the two seeded demo agents so
-    repeated runs of this script don't accumulate false budget pressure."""
-    with psycopg.connect(get_database_url()) as conn:
-        conn.execute(
-            "UPDATE agent SET spent_so_far = 0 WHERE id IN (%s, %s)",
-            (HUMAN_AGENT_ID, AI_AGENT_ID),
-        )
-
-
 # ---------------------------------------------------------------------------
 # Synthetic webhook payloads, shaped exactly like what spikes/razorpay_spike.py
 # documented from Razorpay's own docs (https://razorpay.com/docs/webhooks/payloads/payments/)
@@ -215,10 +205,6 @@ def scenario_c_ai_agent_over_threshold() -> None:
     print("SCENARIO (c): ai_agent buys something OVER approval_required_above (2000)")
     print("=" * 70)
 
-    # Isolate the approval-required GATE: without this, scenario (b)'s
-    # purchase (same agent) would still count against the budget here.
-    reset_agent_spend()
-
     result = run_pipeline(
         {
             "user_message": "Buy the Windproof Running Jacket right now",
@@ -258,8 +244,6 @@ def scenario_d_captured_webhook() -> None:
     print("SCENARIO (d): ai_agent in-budget purchase, real order + simulated payment.captured")
     print("=" * 70)
 
-    reset_agent_spend()
-
     result = run_pipeline(
         {
             "user_message": "Buy the Compression Base Layer Top",
@@ -294,7 +278,6 @@ def scenario_e_failed_webhook_releases_budget() -> None:
     print("SCENARIO (e): ai_agent in-budget purchase, real order + simulated payment.failed (card_declined)")
     print("=" * 70)
 
-    reset_agent_spend()
     spent_before = get_agent_spent(AI_AGENT_ID)
     print(f"agent #{AI_AGENT_ID} spent_so_far BEFORE purchase attempt: {spent_before}")
 
@@ -336,7 +319,6 @@ def scenario_e_failed_webhook_releases_budget() -> None:
 
 
 def main() -> None:
-    reset_agent_spend()
     scenario_a_human_in_budget()
     scenario_b_ai_agent_under_threshold()
     scenario_c_ai_agent_over_threshold()

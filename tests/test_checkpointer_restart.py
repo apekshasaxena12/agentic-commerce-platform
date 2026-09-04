@@ -29,20 +29,58 @@ import uuid
 from pathlib import Path
 
 import psycopg
+import pytest
 
 from db.connection import get_database_url
 from db.orders import get_order
 
 CODE_DIR = Path(__file__).resolve().parent.parent
-HUMAN_AGENT_ID = 5  # "Demo Shopper (human)" — see server/app.py's HUMAN_AGENT_ID
+
+
+@pytest.fixture
+def temp_agent():
+    """
+    A throwaway human_session agent, isolated from the real seeded demo
+    agent (id 5) — this test used to reset agent 5's real spent_so_far as
+    "demo hygiene" before each run, which is exactly the kind of shared-
+    state mutation that caused spent_so_far to drift from reality (see the
+    session's reconciliation). Cleans up everything it created (orders +
+    their audit_log_entry/approval_request rows, then the agent itself) so
+    repeated runs never accumulate junk either.
+    """
+    with psycopg.connect(get_database_url()) as conn:
+        agent_id = conn.execute(
+            """
+            INSERT INTO agent (type, name, budget_limit, spent_so_far, permissions)
+            VALUES ('human_session', 'checkpointer-restart-test-agent', 100000, 0, '{}')
+            RETURNING id
+            """
+        ).fetchone()[0]
+
+    yield agent_id
+
+    with psycopg.connect(get_database_url()) as conn:
+        conn.execute(
+            "DELETE FROM audit_log_entry WHERE order_id IN (SELECT id FROM orders WHERE agent_id = %s)",
+            (agent_id,),
+        )
+        conn.execute(
+            "DELETE FROM approval_request WHERE order_id IN (SELECT id FROM orders WHERE agent_id = %s)",
+            (agent_id,),
+        )
+        conn.execute("DELETE FROM orders WHERE agent_id = %s", (agent_id,))
+        conn.execute("DELETE FROM agent WHERE id = %s", (agent_id,))
+
 
 # Runs run_pipeline() up to its first pause (authorization's
 # human_confirm_required, guaranteed for a human_session agent regardless
 # of amount — see pipeline/graph.py's _authorization_impl), prints the
 # resulting order_id as JSON, then os._exit()s immediately — no clean
 # shutdown, simulating the process dying right where InMemorySaver would
-# have lost everything.
-_START_AND_KILL = """
+# have lost everything. Templated with the throwaway agent_id per-test
+# (not a module-level constant) since that id only exists once temp_agent
+# has created it.
+_START_AND_KILL_TEMPLATE = """
 import json
 import os
 import sys
@@ -67,7 +105,7 @@ assert value.get("type") == "human_confirm_required", value
 print(json.dumps({"order_id": result["order_id"], "amount": result["amount"]}))
 sys.stdout.flush()
 os._exit(0)  # no cleanup, no atexit — simulates a killed process, not a clean exit
-""" % HUMAN_AGENT_ID
+"""
 
 # A completely separate process/interpreter: fresh GRAPH, fresh
 # ConnectionPool, no memory of _START_AND_KILL's run whatsoever. Resumes
@@ -107,14 +145,11 @@ def _run(code: str, thread_id: str) -> dict:
     return json.loads(proc.stdout.strip().splitlines()[-1])
 
 
-def test_paused_order_survives_a_real_process_restart():
-    with psycopg.connect(get_database_url()) as conn:
-        conn.execute("UPDATE agent SET spent_so_far = 0 WHERE id = %s", (HUMAN_AGENT_ID,))
-
+def test_paused_order_survives_a_real_process_restart(temp_agent):
     thread_id = f"restart-test-{uuid.uuid4()}"
 
     # --- process 1: pause, then die without ever calling resume ---
-    started = _run(_START_AND_KILL, thread_id)
+    started = _run(_START_AND_KILL_TEMPLATE % temp_agent, thread_id)
     order_id = started["order_id"]
     assert order_id is not None
 

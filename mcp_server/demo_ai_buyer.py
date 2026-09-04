@@ -42,12 +42,11 @@ exactly like Front Door 1 does.
 
 Day 14: can also run against an already-running server instead of
 spawning one — e.g. the deployed Render service — via --server-url or the
-MCP_SERVER_URL env var (see main_async/parse_args below). DATABASE_URL is
-still required either way: reset_agent_spend() always talks to the DB
-directly, and against the deployed server that DATABASE_URL must be the
-same Supabase instance Render's agentic-commerce-mcp service uses (see
-DEPLOY.md) — otherwise this script would zero a different agent row than
-the one the remote server actually charges against.
+MCP_SERVER_URL env var (see main_async/parse_args below). In that mode
+this script itself no longer touches DATABASE_URL at all (it only talks
+to the server over MCP/HTTP); the local-subprocess default above is the
+one that still needs it, since the spawned mcp_server.server process
+does.
 
 Run:
     python mcp_server/demo_ai_buyer.py                       # local subprocess (unchanged default)
@@ -71,20 +70,14 @@ import time
 from pathlib import Path
 
 import httpx
-import psycopg
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 
 CODE_DIR = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(CODE_DIR))
-
-from db.connection import get_database_url  # noqa: E402
 
 PORT = 8765
 LOCAL_URL = f"http://127.0.0.1:{PORT}/mcp"
 LOCAL_MERCHANT_API = f"http://127.0.0.1:{PORT}/merchant"
-
-AI_AGENT_ID = 6  # "Shopping Assistant Agent" — see mcp_server/server.py's AI_AGENT_ID note
 
 # owner@shopfrontrunning.com owns the Windproof Running Jacket (merchant #1,
 # see db/seed_merchant_credentials.py) — the merchant who must resolve
@@ -94,15 +87,6 @@ MERCHANT_PASSWORD = "RunningCo#2026"
 
 UNDER_THRESHOLD_QUERY = "Compression Running Tights"
 OVER_THRESHOLD_QUERY = "Windproof Running Jacket"
-
-
-def reset_agent_spend() -> None:
-    """Demo hygiene, same rationale/pattern as pipeline/demo_run.py's
-    reset_agent_spend: zero out the AI agent's spent_so_far so repeated
-    demo runs (or scenario (b) running right after scenario (a) spent some
-    of the same budget) don't accumulate false budget pressure."""
-    with psycopg.connect(get_database_url()) as conn:
-        conn.execute("UPDATE agent SET spent_so_far = 0 WHERE id = %s", (AI_AGENT_ID,))
 
 
 def _parse_tool_result(result):
@@ -169,8 +153,6 @@ async def scenario_b_over_threshold(session: ClientSession, merchant_api: str) -
     print(f"SCENARIO (b): AI buyer checks out '{OVER_THRESHOLD_QUERY}' (over approval_required_above)")
     print("=" * 70)
 
-    reset_agent_spend()  # isolate this scenario's budget from (a)'s spend, same as pipeline/demo_run.py
-
     results = await call(session, "search_catalog", {"query": OVER_THRESHOLD_QUERY, "category": "outerwear"})
     assert results, "expected search_catalog to find the seeded product"
     product = results[0]
@@ -211,8 +193,6 @@ async def scenario_c_compare_and_buy(session: ClientSession, merchant_api: str) 
     print("\n" + "=" * 70)
     print("SCENARIO (c): AI buyer compare_and_buy('something for cold weather running', max_price=4000)")
     print("=" * 70)
-
-    reset_agent_spend()  # isolate this scenario's budget, same as scenario (b)
 
     outcome = await call(
         session, "compare_and_buy", {"query": "something for cold weather running", "max_price": 4000}
@@ -266,8 +246,6 @@ def _mcp_and_merchant_urls(server_url: str) -> tuple[str, str]:
 
 
 async def main_async(server_url: str | None) -> None:
-    reset_agent_spend()
-
     server_proc = None
     if server_url:
         url, merchant_api = _mcp_and_merchant_urls(server_url)
