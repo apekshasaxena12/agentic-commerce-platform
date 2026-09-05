@@ -128,30 +128,35 @@ async def _safe_send(websocket: WebSocket, payload: dict, thread_id: Optional[st
         return False
 
 
-def _make_on_audit(thread_id: str):
+async def _run_pipeline(thread_id: str, fn, *args) -> dict:
     """
-    Callback passed to run_pipeline/resume_pipeline as `on_audit`. Runs
-    INSIDE the worker thread executing the pipeline (see pipeline/graph.py's
-    _audit_sink) — anyio.from_thread.run schedules the actual send back on
-    the event loop that owns this websocket and blocks the worker thread
-    until it's delivered, so each audit_log_entry reaches the client the
-    instant it's written, not after the pipeline call returns.
+    Runs run_pipeline/resume_pipeline (fn) in a worker thread via
+    anyio.to_thread.run_sync, then sends any audit entries it collected as
+    ordinary audit_entry frames afterward.
+
+    A previous version pushed each entry live, mid-run, straight from
+    inside that worker thread via anyio.from_thread.run (see
+    pipeline/graph.py's _audit_sink) — scheduling the send back onto the
+    event loop and blocking the worker thread until delivered, so each
+    audit_log_entry reached the client the instant it was written. That
+    reliably reached the client locally but never once did on the deployed
+    Render backend (confirmed live: log_audit_entry's DB rows landed
+    correctly there, but zero audit_entry frames ever arrived over the
+    real deployed WebSocket for the exact same message). Collecting
+    entries into a plain list from the callback (still running in the
+    worker thread, but doing nothing thread-crossing) and sending them
+    from here — the same async context, via the same _safe_send call that
+    already reliably delivers search_results/turn_complete in
+    production — sidesteps whatever about that cross-thread push doesn't
+    hold up there.
     """
-
-    def _on_audit(entry: dict) -> None:
-        ws = _connections.get(thread_id)
-        if ws is None:
-            return
-        try:
-            anyio.from_thread.run(_safe_send, ws, {"type": "audit_entry", **entry}, thread_id)
-        except Exception as exc:
-            # _safe_send itself never raises for a dead socket (see above) —
-            # this is a backstop for anything else going wrong scheduling
-            # onto the event loop, kept broad because a live pipeline run
-            # must never be broken by a best-effort UI push failing.
-            print(f"[ws {thread_id}] audit push failed unexpectedly: {exc!r}", flush=True)
-
-    return _on_audit
+    entries: list[dict] = []
+    result = await anyio.to_thread.run_sync(functools.partial(fn, *args, on_audit=entries.append))
+    ws = _connections.get(thread_id)
+    if ws is not None:
+        for entry in entries:
+            await _safe_send(ws, {"type": "audit_entry", **entry}, thread_id)
+    return result
 
 
 @app.websocket("/ws/chat")
@@ -267,10 +272,7 @@ async def _handle_message(websocket: WebSocket, thread_id: str, text: str) -> No
         "payment_method": "card",
         "discount_pct": 0,
     }
-    on_audit = _make_on_audit(thread_id)
-    result = await anyio.to_thread.run_sync(
-        functools.partial(run_pipeline, initial_state, thread_id, on_audit)
-    )
+    result = await _run_pipeline(thread_id, run_pipeline, initial_state, thread_id)
     await _emit_result(websocket, thread_id, result)
 
 
@@ -301,10 +303,7 @@ async def _handle_checkout_product(
         "payment_method": "card",
         "discount_pct": 0,
     }
-    on_audit = _make_on_audit(thread_id)
-    result = await anyio.to_thread.run_sync(
-        functools.partial(run_pipeline, initial_state, thread_id, on_audit)
-    )
+    result = await _run_pipeline(thread_id, run_pipeline, initial_state, thread_id)
     await _emit_result(websocket, thread_id, result)
 
 
@@ -340,10 +339,7 @@ async def _handle_checkout_cart(websocket: WebSocket, thread_id: str, items: lis
         "payment_method": "card",
         "discount_pct": 0,
     }
-    on_audit = _make_on_audit(thread_id)
-    result = await anyio.to_thread.run_sync(
-        functools.partial(run_pipeline, initial_state, thread_id, on_audit)
-    )
+    result = await _run_pipeline(thread_id, run_pipeline, initial_state, thread_id)
     await _emit_result(websocket, thread_id, result)
 
 
@@ -368,10 +364,7 @@ async def _handle_confirm(websocket: WebSocket, thread_id: str, decision: str) -
         await _safe_send(websocket, {"type": "turn_complete"}, thread_id)
         return
 
-    on_audit = _make_on_audit(thread_id)
-    result = await anyio.to_thread.run_sync(
-        functools.partial(resume_pipeline, thread_id, decision, on_audit)
-    )
+    result = await _run_pipeline(thread_id, resume_pipeline, thread_id, decision)
     await _emit_result(websocket, thread_id, result)
 
 
@@ -445,10 +438,7 @@ async def _handle_checkout_outcome(websocket: WebSocket, thread_id: str, data: d
         return
 
     payload = _build_webhook_from_checkout_outcome(data)
-    on_audit = _make_on_audit(thread_id)
-    result = await anyio.to_thread.run_sync(
-        functools.partial(resume_pipeline, thread_id, payload, on_audit)
-    )
+    result = await _run_pipeline(thread_id, resume_pipeline, thread_id, payload)
     await _emit_result(websocket, thread_id, result)
 
 
@@ -561,10 +551,7 @@ async def razorpay_webhook(request: Request) -> dict:
         # class of bug as the confirm/checkout_outcome guards above.
         return {"status": "ignored", "reason": f"no webhook pending for this order (pending={pending!r})"}
 
-    on_audit = _make_on_audit(thread_id)
-    result = await anyio.to_thread.run_sync(
-        functools.partial(resume_pipeline, thread_id, payload, on_audit)
-    )
+    result = await _run_pipeline(thread_id, resume_pipeline, thread_id, payload)
 
     ws = _connections.get(thread_id)
     if ws is not None:
