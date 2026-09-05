@@ -125,109 +125,6 @@ function StockManage() {
   );
 }
 
-function PendingApprovals() {
-  const [approvals, setApprovals] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState(null);
-  const [resolving, setResolving] = useState(null);
-
-  async function refresh() {
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(`${API_BASE}/pending-approvals`, { credentials: "include" });
-      if (!res.ok) throw new Error(await describeError(res));
-      setApprovals(await res.json());
-    } catch (err) {
-      setError(err.message || "Could not reach the merchant API");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    refresh();
-  }, []);
-
-  async function resolve(approvalId, approved) {
-    setResolving(approvalId);
-    setError(null);
-    try {
-      const res = await fetch(`${API_BASE}/resolve-approval/${approvalId}`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ approved }),
-      });
-      if (!res.ok) throw new Error();
-      // The order is now resolved (completed or failed) — it drops off this
-      // pending list rather than needing its row updated in place.
-      setApprovals((prev) => prev.filter((a) => a.id !== approvalId));
-    } catch {
-      setError(`Approval #${approvalId}: ${approved ? "approve" : "reject"} failed`);
-    } finally {
-      setResolving(null);
-    }
-  }
-
-  return (
-    <section className="panel">
-      <div className="panel-header">
-        <h2>Pending approvals</h2>
-        <button className="refresh" onClick={refresh}>
-          Refresh
-        </button>
-      </div>
-      {error && <div className="banner-error">{error}</div>}
-      {loading && <p className="muted">Loading…</p>}
-      {!loading && !error && approvals.length === 0 && (
-        <p className="muted">No AI agent purchases are awaiting your approval right now.</p>
-      )}
-      {approvals.length > 0 && (
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Order</th>
-              <th>Agent</th>
-              <th>Amount</th>
-              <th>Requested</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {approvals.map((a) => (
-              <tr key={a.id}>
-                <td>#{a.order_id}</td>
-                <td>
-                  <span className={`agent-badge ${a.agent_type}`}>{a.agent_name}</span>
-                </td>
-                <td className="amount">{formatMoney(a.amount)}</td>
-                <td className="muted small">{new Date(a.requested_at).toLocaleString()}</td>
-                <td className="actions">
-                  <button
-                    className="approve-btn"
-                    disabled={resolving === a.id}
-                    onClick={() => resolve(a.id, true)}
-                  >
-                    Approve
-                  </button>
-                  <button
-                    className="reject-btn"
-                    disabled={resolving === a.id}
-                    onClick={() => resolve(a.id, false)}
-                  >
-                    Reject
-                  </button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-    </section>
-  );
-}
-
 function AgentOverview() {
   const [agents, setAgents] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -794,9 +691,6 @@ export default function MerchantDashboard() {
         <button className={tab === "stock" ? "active" : ""} onClick={() => setTab("stock")}>
           Stock
         </button>
-        <button className={tab === "approvals" ? "active" : ""} onClick={() => setTab("approvals")}>
-          Pending approvals
-        </button>
         <button className={tab === "audit" ? "active" : ""} onClick={() => setTab("audit")}>
           Audit trail
         </button>
@@ -816,7 +710,6 @@ export default function MerchantDashboard() {
 
       <main className="merchant-content">
         {tab === "stock" && <StockManage />}
-        {tab === "approvals" && <PendingApprovals />}
         {tab === "audit" && <AuditTrail />}
         {tab === "incidents" && <IncidentCenter />}
         {tab === "score" && <AICommerceScore />}
